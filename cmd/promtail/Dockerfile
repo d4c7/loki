@@ -4,7 +4,7 @@ FROM golang:1.14.2 as build
 ARG TOUCH_PROTOS
 COPY . /src/loki
 WORKDIR /src/loki
-RUN apt-get update && apt-get install -qy libsystemd-dev
+RUN apt-get update && apt-get install -qy libsystemd-dev golang-gogoprotobuf-dev
 RUN make clean && (if [ "${TOUCH_PROTOS}" ]; then make touch-protos; fi) && make BUILD_IN_CONTAINER=false promtail
 
 # Promtail requires debian as the base image to support systemd journal reading

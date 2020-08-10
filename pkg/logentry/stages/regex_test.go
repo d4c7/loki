@@ -385,3 +385,63 @@ func BenchmarkRegexStage(b *testing.B) {
 		})
 	}
 }
+
+func TestPipeline_RegexWithDuplicatedKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		config          string
+		entry           string
+		expectedExtract map[string]interface{}
+	}{
+		"successfully run a pipeline regex with duplicated fields": {
+			`
+pipeline_stages:
+- regex:
+    expression: "field_A:(\\S+)"
+    coalesce: "field_A"
+- regex:
+    expression: "field_B:(\\S+)"
+    coalesce: "field_B"
+- regex:
+    expression: "field_[XY]:(\\S+)"
+    coalesce: "field_C"
+- regex:
+    expression: "field_[XYZ]:(\\S+)"
+    coalesce: "field_D"
+- regex:
+    expression: "field_[XYZ]:(\\S+)"
+    coalesce: "field_E"
+    dedup: true
+`,
+			`field_A:one field_A:two field_B:single field_X:uno field_Y:dos field_Z:uno`,
+			map[string]interface{}{
+				"field_A": "[one,two]",
+				"field_B": "single",
+				"field_C": "[uno,dos]",
+				"field_D": "[uno,dos,uno]",
+				"field_E": "[uno,dos]",
+			},
+		},
+	}
+
+	for testName, testData := range tests {
+		testData := testData
+
+		t.Run(testName, func(t *testing.T) {
+			t.Parallel()
+
+			pl, err := NewPipeline(util.Logger, loadConfig(testData.config), nil, prometheus.DefaultRegisterer)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			lbls := model.LabelSet{}
+			ts := time.Now()
+			entry := testData.entry
+			extracted := map[string]interface{}{}
+			pl.Process(lbls, extracted, &ts, &entry)
+			assert.Equal(t, testData.expectedExtract, extracted)
+		})
+	}
+}
