@@ -101,6 +101,12 @@ func TestConvertDateLayout(t *testing.T) {
 			"Jul 15 01:02:03",
 			time.Date(time.Now().Year(), 7, 15, 1, 2, 3, 0, location),
 		},
+		"custom layout with 2 digit year": {
+			"06 Jan 02 15:04:05",
+			nil,
+			"19 Jul 15 01:02:03",
+			time.Date(2019, 7, 15, 1, 2, 3, 0, time.UTC),
+		},
 	}
 
 	for testName, testData := range tests {
