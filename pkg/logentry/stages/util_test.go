@@ -2,6 +2,8 @@ package stages
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,4 +205,76 @@ func TestParseTimestampWithoutYear(t *testing.T) {
 			assert.Equal(t, testData.expected, parsed)
 		})
 	}
+}
+
+func TestExtractReg(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		regexp   string
+		s        string
+		dedup    bool
+		expected string
+		err      error
+	}{
+		"single match": {
+			"b:(\\d)",
+			"a:1 b:2 c:3",
+			false,
+			"2",
+			nil,
+		},
+		"multiple match": {
+			"[bc]:(\\d)",
+			"a:1 b:2 c:3",
+			false,
+			"2,3",
+			nil,
+		},
+		"match_uncapture": {
+			"b:\\d",
+			"a:1 b:2 c:3",
+			false,
+			"b:2",
+			nil,
+		},
+		"multiple match 2": {
+			"a:(\\d).*c:(\\d)",
+			"a:1 b:2 c:3",
+			false,
+			"1,3",
+			nil,
+		},
+		"match_all": {
+			".*",
+			"a:1 b:2 c:3",
+			false,
+			"a:1 b:2 c:3",
+			nil,
+		},
+		"match_all_2": {
+			"(.*)",
+			"a:1 b:2 c:3",
+			false,
+			"a:1 b:2 c:3",
+			nil,
+		},
+	}
+
+	for testName, testData := range tests {
+		testData := testData
+
+		t.Run(testName, func(t *testing.T) {
+			t.Parallel()
+			re, err := regexp.Compile(testData.regexp)
+			if ((err != nil) != (testData.err != nil)) || (err != nil && testData.err != nil && err.Error() != testData.err.Error()) {
+				t.Errorf("extractReg expected error = %v, actual error = %v", testData.err, err)
+				return
+			}
+			res := extractReg(re, testData.s, testData.dedup)
+
+			assert.Equal(t, testData.expected, strings.Join(res, ","))
+		})
+	}
+
 }

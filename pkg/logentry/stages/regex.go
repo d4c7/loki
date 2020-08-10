@@ -3,6 +3,7 @@ package stages
 import (
 	"reflect"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/go-kit/kit/log"
@@ -18,12 +19,15 @@ const (
 	ErrCouldNotCompileRegex  = "could not compile regular expression"
 	ErrEmptyRegexStageConfig = "empty regex stage configuration"
 	ErrEmptyRegexStageSource = "empty source"
+	ErrEmptyRegexStageJoin   = "empty join"
 )
 
 // RegexConfig contains a regexStage configuration
 type RegexConfig struct {
 	Expression string  `mapstructure:"expression"`
 	Source     *string `mapstructure:"source"`
+	Coalesce   *string `mapstructure:"coalesce"`
+	DeDup      *bool   `mapstructure:"dedup"`
 }
 
 // validateRegexConfig validates the config and return a regex
@@ -43,6 +47,15 @@ func validateRegexConfig(c *RegexConfig) (*regexp.Regexp, error) {
 	expr, err := regexp.Compile(c.Expression)
 	if err != nil {
 		return nil, errors.Wrap(err, ErrCouldNotCompileRegex)
+	}
+
+	if c.Coalesce != nil && *c.Coalesce == "" {
+		return nil, errors.New(ErrEmptyRegexStageJoin)
+	}
+
+	if c.DeDup == nil {
+		v := false
+		c.DeDup = &v
 	}
 
 	return expr, nil
@@ -113,18 +126,32 @@ func (r *regexStage) Process(labels model.LabelSet, extracted map[string]interfa
 		}
 		return
 	}
-
-	match := r.expression.FindStringSubmatch(*input)
-	if match == nil {
-		if Debug {
-			level.Debug(r.logger).Log("msg", "regex did not match", "input", *input, "regex", r.expression)
+	if r.cfg.Coalesce == nil {
+		match := r.expression.FindStringSubmatch(*input)
+		if match == nil {
+			if Debug {
+				level.Debug(r.logger).Log("msg", "regex did not match", "input", *input, "regex", r.expression)
+			}
+			return
 		}
-		return
-	}
 
-	for i, name := range r.expression.SubexpNames() {
-		if i != 0 && name != "" {
-			extracted[name] = match[i]
+		for i, name := range r.expression.SubexpNames() {
+			if i != 0 && name != "" {
+				extracted[name] = match[i]
+			}
+		}
+	} else {
+		join := *r.cfg.Coalesce
+
+		l := extractReg(r.expression, *input, *r.cfg.DeDup)
+
+		switch len(l) {
+		case 0:
+			//do nothing
+		case 1:
+			extracted[join] = l[0]
+		default:
+			extracted[join] = "[" + strings.Join(l, ",") + "]"
 		}
 	}
 

@@ -3,6 +3,7 @@ package stages
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -189,4 +190,32 @@ func getString(unk interface{}) (string, error) {
 	default:
 		return "", fmt.Errorf("Can't convert %v to string", unk)
 	}
+}
+
+func extractReg(expression *regexp.Regexp, s string, dedup bool) (list []string) {
+	match := expression.FindAllStringSubmatch(s, -1)
+	if match == nil {
+		return nil
+	}
+match:
+	for _, m := range match {
+		if len(m) > 1 {
+			for _, value := range m[1:] {
+				if len(value) > 0 {
+					if dedup {
+						for j, nl := 0, len(list); j < nl; j++ {
+							if list[j] == value {
+								continue match
+							}
+						}
+					}
+					list = append(list, value)
+				}
+			}
+		} else if len(m) > 0 {
+			list = append(list, m[0])
+		}
+	}
+
+	return
 }
