@@ -2,6 +2,7 @@ package config
 
 import (
 	"flag"
+	"github.com/cortexproject/cortex/pkg/util/flagext"
 
 	"github.com/grafana/loki/pkg/promtail/client"
 	"github.com/grafana/loki/pkg/promtail/positions"
@@ -19,6 +20,7 @@ type Config struct {
 	PositionsConfig positions.Config      `yaml:"positions,omitempty"`
 	ScrapeConfig    []scrapeconfig.Config `yaml:"scrape_configs,omitempty"`
 	TargetConfig    file.Config           `yaml:"target_config,omitempty"`
+	configFile      string
 }
 
 // RegisterFlags with prefix registers flags where every name is prefixed by
@@ -33,4 +35,11 @@ func (c *Config) RegisterFlagsWithPrefix(prefix string, f *flag.FlagSet) {
 // RegisterFlags registers flags.
 func (c *Config) RegisterFlags(f *flag.FlagSet) {
 	c.RegisterFlagsWithPrefix("", f)
+	f.StringVar(&c.configFile, "config.file", "", "yaml file to load")
+}
+
+func (c *Config) Clone() flagext.Registerer {
+	return flagext.Registerer(func(c Config) *Config {
+		return &c
+	}(*c))
 }
