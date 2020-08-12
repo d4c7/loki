@@ -61,12 +61,12 @@ The parses has defined some modes of operation to ease the use of distinct use c
 - Unordered Group Mode: This is a "Group Mode" but tracking multiple group keys simultaneously. So the lines can be
  parsed unordered.
 
-###New Line Mode
+### New Line Mode
 
 In the multiline mode the lines are joined until a new line mark is found. Then the previous collected lines are 
 processed as a single one.
 
-####Example:
+#### Example:
 
 Given the following log lines:
 
@@ -107,12 +107,12 @@ log line 1 sub log line 1.1
 log line 2 sub log line 2.1
 ```
 
-##Continue Mode
+## Continue Mode
 
 A line that match a "continue" regular expresion are joined with the next one.
 
 
-####Example 1:
+#### Example 1:
 
 Given the following log lines:
 
@@ -138,7 +138,7 @@ log event one
 log event two
 ```
 
-####Example 2:
+#### Example 2:
 
 Given the following log lines:
 
@@ -170,13 +170,13 @@ We can use `next` and `prev` regular expressions but remmber the regular express
  selected text and not the full log line.
  
  
-##Group Mode
+## Group Mode
 
  A "group" regular expression is used to determine the group key for a log line. All the lines with same group key are
  joined.
 
 
-####Example 1:
+#### Example 1:
 
 Given the following log lines:
 
@@ -208,13 +208,13 @@ NOTE: The group key is keep at the first line but removed for the next lines. Yo
 `next`and `first` regular expressions. 
 
 
-#Unordered Group Mode
+# Unordered Group Mode
  
 Sometimes the log lines are not perfectly ordered. In these cases you can use unordererd group mode to track multiple
 log lines and group them together. The parses tries to preserve the order of the log lines as much as possible.
 
 
-####Example:
+#### Example:
 
 Given the following log lines:
 
