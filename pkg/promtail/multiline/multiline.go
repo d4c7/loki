@@ -8,62 +8,98 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/common/model"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	ErrEmptyMultiLineParserStageConfig              = "empty json stage configuration"
-	ErrCouldNotCompileMultiLineParserGroupRegex     = "could not compile coalesce group_expression"
-	ErrCouldNotCompileMultiLineParserContRegex      = "could not compile coalesce continue_expression"
-	ErrCouldNotCompileMultiLineParserSubFilterRegex = "could not compile coalesce subline_filter_expression"
-	ErrMultiLineParserStageUnconfig                 = "need any group_expression or continue_expression"
+	ErrEmptyMultiLineConfig                    = "empty configuration"
+	ErrCouldNotCompileMultiLineExpressionRegex = "could not compile expression"
+	ErrCouldNotCompileMultiLineFirstLineRegex  = "could not compile first_expression"
+	ErrCouldNotCompileMultiLineNextLineRegex   = "could not compile next_expression"
+	ErrCouldMultiLineExpressionRequiredRegex   = "expression is required"
+	ErrMultiLineUnsupportedMode                = "unsupported mode"
+	ErrMultiLineUnvalidMaxWaitTime             = "invalid max_wait_time duration"
 )
 
-//TODO: note //!!--positions.sync-period", 10*time.Second
-type Config struct {
-	GroupKeyExpression     string `yaml:"group_expression"`
-	ContinueLineExpression string `yaml:"continue_expression"`
-	AppendExpression       string `yaml:"append_expression"`
-	PreserveContinue       bool   `yaml:"preserve_continue"`
-	FlushPeriod            int    `yaml:"flush_period"`
-	JoinText               string `yaml:"join_text"`
-	MultiTrack             bool   `yaml:"multitrack"`
+type FlushableEntryHandler interface {
+	Flush() error
+	api.EntryHandler
 }
 
-type multiLine struct {
-	mode              int
-	cfg               *Config
-	logger            log.Logger
-	groupKeyRegex     *regexp.Regexp
-	continueLineRegex *regexp.Regexp
-	appendRegex       *regexp.Regexp
-	trackers          map[string]*track
-	lastGroupKey      string
-	quit              chan bool
-	list              []*track
-	flush             time.Duration
-	next              api.EntryHandler
+//note log lines could be lost if MaxWait > positions.sync-period ( def 10*time.Second)
+type Config struct {
+	Expression          string `yaml:"expression"`
+	FirstLineExpression string `yaml:"first"`
+	NextLineExpression  string `yaml:"next"`
+	MaxWait             string `yaml:"max_wait"`
+	Delimiter           string `yaml:"delimiter"`
+	Mode                string `yaml:"mode"`
+}
+
+type multiLineParser struct {
+	cfg             *Config
+	logger          log.Logger
+	expressionRegex *regexp.Regexp
+	firstLineRegex  *regexp.Regexp
+	nextLineRegex   *regexp.Regexp
+	multitrack      bool
+	multilines      []*multilineEntry
+	multiline       *multilineEntry
+	quit            chan bool
+	maxWait         time.Duration
+	next            api.EntryHandler
+	handler         func(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) error
 	sync.Mutex
 }
 
-type track struct {
-	inTime    time.Time
-	labels    model.LabelSet
-	timestamp time.Time
-	entry     string
+type multilineEntry struct {
+	enrollTime time.Time
+	labels     model.LabelSet
+	timestamp  time.Time
+	key        string
+	entry      string
+	lines      int
 }
 
-func (c multiLine) launchCleaner() {
-	cleaner := time.NewTicker(time.Duration(c.cfg.FlushPeriod*1000/2) * time.Millisecond)
+func (d *multilineEntry) reset() {
+	d.labels = model.LabelSet{}
+	d.entry = ""
+	d.lines = 0
+}
+
+func (d *multilineEntry) set(labels model.LabelSet, t time.Time, entry string) {
+	if labels != nil {
+		d.labels = labels.Clone()
+	} else {
+		d.labels = model.LabelSet{}
+	}
+	d.timestamp = t
+	d.entry = entry
+	d.lines = 1
+	d.enrollTime = time.Now()
+}
+
+func (d *multilineEntry) append(labels model.LabelSet, entry string, delimiter string) {
+	d.labels = labels.Merge(labels)
+	d.entry = join(d.entry, delimiter, entry)
+	d.lines++
+}
+
+func (c *multiLineParser) startFlusher() {
+	flusher := time.NewTicker(c.maxWait / 2)
 	quit := make(chan bool)
 	go func() {
 		for {
 			select {
-			case <-cleaner.C:
-				c.clean(false)
+			case <-flusher.C:
+				err := c.flush(false)
+				if err != nil {
+					level.Debug(c.logger).Log("msg", "failed to flush multiline logs", "err", err)
+				}
 			case <-quit:
-				cleaner.Stop()
+				flusher.Stop()
 				return
 			}
 		}
@@ -71,158 +107,215 @@ func (c multiLine) launchCleaner() {
 	c.quit = quit
 }
 
-func (c *multiLine) Flush() {
-	c.clean(true)
+func (c *multiLineParser) Flush() error {
+	return c.flush(true)
 }
 
-func (c *multiLine) clean(b bool) {
-	level.Warn(c.logger).Log("msg", "run cleaner")
-
-	c.Lock()
+func (c *multiLineParser) flush(force bool) error {
 	now := time.Now()
-	for k, t := range c.trackers {
-		if b || t.inTime.After(now) {
-			delete(c.trackers, k)
-			c.list = append(c.list, t)
+	c.Lock()
+	var err util.MultiError
+
+	if c.multitrack {
+		nextGen := make([]*multilineEntry, 0, len(c.multilines))
+		for _, t := range c.multilines {
+			if t.lines == 0 {
+				continue
+			}
+			if force || now.Sub(t.enrollTime) > c.maxWait {
+				err.Add(c.next.Handle(t.labels, t.timestamp, t.entry))
+			} else {
+				nextGen = append(nextGen, t)
+			}
+		}
+		c.multilines = nextGen
+	} else {
+		t := c.multiline
+		if t.lines > 0 && (force || now.Sub(t.enrollTime) > c.maxWait) {
+			err.Add(c.next.Handle(t.labels, t.timestamp, t.entry))
+			t.reset()
 		}
 	}
 	c.Unlock()
+	return err.Err()
 }
 
-func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler) (api.EntryHandler, error) {
+func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler) (FlushableEntryHandler, error) {
 	if config == nil {
-		return nil, errors.New(ErrEmptyMultiLineParserStageConfig)
+		return nil, errors.New(ErrEmptyMultiLineConfig)
 	}
 
-	ml := &multiLine{
-		cfg:      config,
-		logger:   log.With(logger, "component", "multiline"),
-		list:     make([]*track, 0),
-		trackers: map[string]*track{},
-		next:     next,
+	ml := &multiLineParser{
+		cfg:    config,
+		logger: log.With(logger, "component", "multiline"),
 	}
 
-	if len(config.GroupKeyExpression) > 0 {
-		expr, err := regexp.Compile(config.GroupKeyExpression)
+	if len(config.Expression) > 0 {
+		expr, err := regexp.Compile(config.Expression)
 		if err != nil {
-			return nil, errors.Wrap(err, ErrCouldNotCompileMultiLineParserGroupRegex)
+			return nil, errors.Wrap(err, ErrCouldNotCompileMultiLineExpressionRegex)
 		}
-		ml.groupKeyRegex = expr
-	}
-
-	if len(config.ContinueLineExpression) > 0 {
-		expr, err := regexp.Compile(config.ContinueLineExpression)
-		if err != nil {
-			return nil, errors.Wrap(err, ErrCouldNotCompileMultiLineParserContRegex)
-		}
-		ml.continueLineRegex = expr
-	}
-
-	if len(config.AppendExpression) > 0 {
-		expr, err := regexp.Compile(config.AppendExpression)
-		if err != nil {
-			return nil, errors.Wrap(err, ErrCouldNotCompileMultiLineParserSubFilterRegex)
-		}
-		ml.appendRegex = expr
-	}
-
-	if "" == config.GroupKeyExpression && "" == config.ContinueLineExpression {
-		return nil, errors.New(ErrMultiLineParserStageUnconfig)
-	}
-
-	if config.FlushPeriod == 0 {
-		config.FlushPeriod = 30
-	}
-
-	if config.FlushPeriod > 0 {
-		ml.launchCleaner()
+		ml.expressionRegex = expr
 	} else {
-		level.Warn(ml.logger).Log("msg", "multiline cleaner disabled")
+		return nil, errors.New(ErrCouldMultiLineExpressionRequiredRegex)
 	}
+
+	if len(config.FirstLineExpression) > 0 {
+		expr, err := regexp.Compile(config.FirstLineExpression)
+		if err != nil {
+			return nil, errors.Wrap(err, ErrCouldNotCompileMultiLineFirstLineRegex)
+		}
+		ml.firstLineRegex = expr
+	}
+
+	if len(config.NextLineExpression) > 0 {
+		expr, err := regexp.Compile(config.NextLineExpression)
+		if err != nil {
+			return nil, errors.Wrap(err, ErrCouldNotCompileMultiLineNextLineRegex)
+		}
+		ml.nextLineRegex = expr
+	}
+
+	ml.maxWait = 5 * time.Second
+	if config.MaxWait != "" {
+		var err error
+		ml.maxWait, err = time.ParseDuration(config.MaxWait)
+		if err != nil {
+			return nil, errors.Wrap(err, ErrMultiLineUnvalidMaxWaitTime)
+		}
+	}
+	if ml.maxWait > 0 {
+		ml.startFlusher()
+	} else {
+		level.Warn(ml.logger).Log("msg", "multiline flusher disabled")
+	}
+
+	switch config.Mode {
+	case "newline":
+		ml.handler = handleNewLineMode
+	case "group":
+		ml.handler = handleGroupMode
+	case "unordered_group":
+		ml.handler = handleUnorderedGroupMode
+		ml.multitrack = true
+	case "continue":
+		ml.handler = handleContinueMode
+	default:
+		return nil, errors.New(ErrMultiLineUnsupportedMode)
+	}
+
+	if ml.multitrack {
+		ml.multilines = []*multilineEntry{}
+	} else {
+		ml.multiline = newLine("")
+	}
+
+	if next == nil {
+		level.Warn(ml.logger).Log("msg", "multiline next handler is not defined")
+		next = api.EntryHandlerFunc(func(labels model.LabelSet, time time.Time, entry string) error {
+			return nil
+		})
+	}
+
+	ml.next = next
 
 	return ml, nil
 }
 
-func (c *multiLine) Handle(labels model.LabelSet, t time.Time, entry string) error {
-	now := time.Now()
-	var readyEntries []*track
-	workLine := entry
-
-	groupContinue := true
-	if c.continueLineRegex != nil {
-		_, mat, inv := splitMatch(c.continueLineRegex, workLine)
-		groupContinue = mat != ""
-		if groupContinue && !c.cfg.PreserveContinue {
-			workLine = inv
-		}
-	}
-
-	groupKey := ""
-	workLineInv := entry
-	//	groupMatch:=""
-	if c.groupKeyRegex != nil {
-		var mat string
-		groupKey, mat, workLineInv = splitMatch(c.groupKeyRegex, workLine)
-		if groupKey == "" && mat != "" {
-			c.clean(true)
-		}
-
-		if !c.cfg.MultiTrack && c.lastGroupKey != "" && groupKey != c.lastGroupKey {
-			c.clean(true)
-		}
-
-		c.lastGroupKey = groupKey
-	}
-	/*
-		if groupKey == "" && (c.continueLineRegex == nil) {
-			groupContinue = true
-		}*/
-
-	//groupContinue := c.continueLineRegex == nil || c.continueLineRegex.Match([]byte(*entry))
-
-	c.Lock()
-	readyEntries = c.list[:]
-	c.list = c.list[:0]
-	prevEntry, _ := c.trackers[groupKey]
-	if groupContinue {
-		if prevEntry == nil {
-			prevEntry = &track{
-				inTime:    now,
-				timestamp: t,
-				labels:    labels,
-				entry:     workLine,
-			}
-			c.trackers[groupKey] = prevEntry
-		} else {
-			prevEntry.labels.Merge(labels)
-			prevEntry.entry = c.joinLine(prevEntry.entry, workLineInv, workLine)
-		}
+func handleNewLineMode(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) (err error) {
+	d := c.multiline
+	if !c.expressionRegex.Match([]byte(entry)) {
+		d.append(labels, selection(c.nextLineRegex, entry), c.cfg.Delimiter)
 	} else {
-		if prevEntry != nil {
-			delete(c.trackers, groupKey)
-			prevEntry.entry = c.joinLine(prevEntry.entry, workLineInv, workLine)
-			readyEntries = append(readyEntries, prevEntry)
-		} else {
-			readyEntries = append(readyEntries, &track{
-				inTime:    now,
-				timestamp: t,
-				labels:    labels,
-				entry:     workLine,
-			})
+		if d.lines > 0 {
+			err = c.next.Handle(d.labels, d.timestamp, d.entry)
 		}
+		d.set(labels, t, selection(c.firstLineRegex, entry))
 	}
-	c.Unlock()
-
-	var err util.MultiError
-	if c.next != nil {
-		for _, i := range readyEntries {
-			err.Add(c.next.Handle(i.labels, i.timestamp, i.entry))
-		}
-	}
-	return err.Err()
+	return
 }
 
-func joinStr(a string, sep string, b string) string {
+func handleGroupMode(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) (err error) {
+	key, inv := disjoint(c.expressionRegex, entry)
+	d := c.multiline
+	if d.key == key {
+		d.labels = labels.Merge(labels)
+		line := inv
+		if c.nextLineRegex != nil {
+			line = selection(c.nextLineRegex, entry)
+		}
+		d.append(labels, line, c.cfg.Delimiter)
+	} else {
+		if d.lines > 0 {
+			err = c.next.Handle(d.labels, d.timestamp, d.entry)
+		}
+		d.set(labels, t, selection(c.firstLineRegex, entry))
+		d.key = key
+	}
+	return
+}
+
+func handleUnorderedGroupMode(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) (err error) {
+	key, inv := disjoint(c.expressionRegex, entry)
+	d := c.fetchLine(key)
+	if d.lines > 0 {
+		d.labels = labels.Merge(labels)
+		line := inv
+		if c.nextLineRegex != nil {
+			line = selection(c.nextLineRegex, entry)
+		}
+		d.append(labels, line, c.cfg.Delimiter)
+	} else {
+		d.set(labels, t, selection(c.firstLineRegex, entry))
+		d.key = key
+	}
+	return
+}
+
+func handleContinueMode(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) (err error) {
+	d := c.multiline
+	line := selection(c.expressionRegex, entry)
+	if line != "" {
+		if d.lines > 0 {
+			d.append(labels, selection(c.nextLineRegex, line), c.cfg.Delimiter)
+		} else {
+			d.set(labels, t, selection(c.firstLineRegex, line))
+		}
+	} else {
+		if d.lines > 0 {
+			d.append(labels, selection(c.nextLineRegex, entry), c.cfg.Delimiter)
+			err = c.next.Handle(d.labels, d.timestamp, d.entry)
+			d.reset()
+		} else {
+			err = c.next.Handle(labels, t, entry)
+		}
+	}
+	return
+}
+
+func (c *multiLineParser) Handle(labels model.LabelSet, t time.Time, entry string) (err error) {
+	c.Lock()
+	err = c.handler(c, labels, t, entry)
+	c.Unlock()
+	return
+}
+
+func (c *multiLineParser) fetchLine(key string) *multilineEntry {
+	for _, t := range c.multilines {
+		if t.key == key {
+			return t
+		}
+	}
+	d := newLine(key)
+	c.multilines = append(c.multilines, d)
+	return d
+}
+
+func newLine(key string) *multilineEntry {
+	return &multilineEntry{labels: model.LabelSet{}, key: key}
+}
+
+func join(a string, sep string, b string) string {
 	r := a
 	if len(a) > 0 {
 		r += sep
@@ -231,34 +324,41 @@ func joinStr(a string, sep string, b string) string {
 	return r
 }
 
-func (c *multiLine) joinLine(a string, b string, full string) string {
-	if c.appendRegex != nil {
-		sel, mat, _ := splitMatch(c.appendRegex, full)
-		if sel == "" {
-			sel = mat
+func disjoint(expression *regexp.Regexp, s string) (string, string) {
+	matches := expression.FindAllSubmatchIndex([]byte(s), -1)
+	sel := make([]string, 0, len(matches))
+	inv := make([]string, 0, len(matches)*2)
+
+	beg := 0
+	end := 0
+	last := 0
+
+	for _, match := range matches {
+		for i, n := 2, len(match); i < n; i += 2 {
+			beg = match[i]
+			if beg < 0 {
+				continue
+			}
+			end = match[i+1]
+			if end > beg && beg >= last {
+				inv = append(inv, s[last:beg])
+				sel = append(sel, s[beg:end])
+				last = end
+			}
 		}
-		b = sel
 	}
-	return joinStr(a, c.cfg.JoinText, b)
+
+	if last < len(s) {
+		inv = append(inv, s[last:])
+	}
+
+	return strings.Join(sel, ""), strings.Join(inv, "")
 }
 
-func splitMatch(expression *regexp.Regexp, s string) (string, string, string) {
-	match := expression.FindAllSubmatchIndex([]byte(s), -1)
-	if match == nil {
-		return "", "", s
+func selection(expression *regexp.Regexp, s string) string {
+	if expression == nil {
+		return s
 	}
-	sel := ""
-	inv := ""
-	mat := ""
-	left := 0
-	for _, i := range match {
-		inv = inv + s[left:i[0]]
-		if len(i) == 4 {
-			sel = sel + s[i[2]:i[3]]
-		}
-		mat = mat + s[i[0]:i[1]]
-		left = i[1]
-	}
-	inv = inv + s[left:]
-	return sel, mat, inv
+	sel, _ := disjoint(expression, s)
+	return sel
 }
