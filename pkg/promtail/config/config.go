@@ -35,7 +35,6 @@ func (c *Config) RegisterFlagsWithPrefix(prefix string, f *flag.FlagSet) {
 // RegisterFlags registers flags.
 func (c *Config) RegisterFlags(f *flag.FlagSet) {
 	c.RegisterFlagsWithPrefix("", f)
-	f.StringVar(&c.configFile, "config.file", "", "yaml file to load")
 }
 
 func (c *Config) Clone() flagext.Registerer {
