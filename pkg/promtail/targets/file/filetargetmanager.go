@@ -138,6 +138,8 @@ func NewFileTargetManager(
 		}
 
 		finalHandler := pipeline.Wrap(client)
+
+		// Add a multiline parser
 		if cfg.MultiLineParser != nil {
 			finalHandler, err = multiline.NewMultiLineParser(logger, cfg.MultiLineParser, finalHandler)
 			if err != nil {

@@ -20,8 +20,8 @@ const (
 	ErrCouldNotCompileMultiLineNextLineRegex   = "could not compile next_expression"
 	ErrCouldMultiLineExpressionRequiredRegex   = "expression is required"
 	ErrMultiLineUnsupportedMode                = "unsupported mode"
-	ErrMultiLineUnvalidMaxWaitTime             = "invalid max_wait duration"
-	ErrMultiLineModeRequireMaxWait             = "mode require max_wait duration > 0 "
+	ErrMultiLineUnvalidMaxWaitTime             = "invalid max_idle_duration duration"
+	ErrMultiLineModeRequireMaxWait             = "mode require max_idle_duration duration > 0 "
 )
 
 // multilne EntryHandler is an api.EntryHandler that allows to flush buffered log lines and be stopped
@@ -35,7 +35,7 @@ type EntryHandler interface {
 	api.EntryHandler
 }
 
-// Note log lines could be lost if MaxWait > positions.sync-period ( def 10*time.Second)
+// Note log lines could be lost if IdleDuration > positions.sync-period ( def 10*time.Second)
 type Config struct {
 	// Mode determines the main behaviour of the parser. Possible values are:
 	// * newline: a new multiline entry starts when a line match a expression
@@ -57,15 +57,15 @@ type Config struct {
 	// Max duration a multiline log line is hold before sending it to the next handler. Note The parser cannot determine
 	// when the next line is part of the current line group or not until the next line is parsed. Even for the
 	// 'continue' mode there is not guarantee that the continued log line will appear soon, if ever.
-	// MaxWait should not be greater than the position sync period (`positions.sync-period`) so no logs are lost if
+	// IdleDuration should not be greater than the position sync period (`positions.sync-period`) so no logs are lost if
 	// some crash occurs when the position of the first line of the multiline log is sync to disk*.
-	// The MaxWait is calculated from the time the first line of the multiline log is added and not updates for each new
+	// The IdleDuration is calculated from the time the first line of the multiline log is added and not updates for each new
 	// log line appended. The default value is "5s". You can disable the max wait using a zero duration.
-	MaxWait string `yaml:"max_wait"`
+	IdleDuration string `yaml:"max_idle_duration"`
 
-	// Delimiter text is added between lines of the multiline entry, e.g. you can use `delimiter: '\n'` to preserve
+	// Separator text is added between lines of the multiline entry, e.g. you can use `delimiter: '\n'` to preserve
 	// line breaks on the entry. The default delimiter is empty.
-	Delimiter string `yaml:"delimiter"`
+	Separator string `yaml:"separator"`
 }
 
 type multiLineParser struct {
@@ -82,10 +82,10 @@ type multiLineParser struct {
 	nextLineRegex *regexp.Regexp
 
 	// maxWait define the max time a multiline entry will be wait for new lines. It's a go duration parsing of
-	// `Config MaxWait`
+	// `Config IdleDuration`
 	maxWait time.Duration
 
-	// i.e. `Config Delimiter`
+	// i.e. `Config Separator`
 	separator string
 
 	// log with context multiline keyvals
@@ -271,9 +271,9 @@ func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler
 
 	// max wait config
 	ml.maxWait = 5 * time.Second
-	if config.MaxWait != "" {
+	if config.IdleDuration != "" {
 		var err error
-		ml.maxWait, err = time.ParseDuration(config.MaxWait)
+		ml.maxWait, err = time.ParseDuration(config.IdleDuration)
 		if err != nil {
 			return nil, errors.Wrap(err, ErrMultiLineUnvalidMaxWaitTime)
 		}
@@ -281,7 +281,7 @@ func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler
 
 	// separator config
 
-	ml.separator = config.Delimiter
+	ml.separator = config.Separator
 
 	// mode and multitrack config
 	// and determine if maxWait is required

@@ -13,30 +13,30 @@ A complete config file sample:
       first: '^(.*)$'
       next: '^\s+(.*)$' 
       delimiter: ' '
-      max_wait: '5s'
+      max_idle_duration: '5s'
 ```
 
-The [`mode`](#Multiline modes) defines the global behaviour of the parser. With `expression` you 
+The [`mode`](#multiline-modes) defines the global behaviour of the parser. With `expression` you 
  can define the regular expression that extracts (capturing groups) the text to append to the multiline log.
- [`first`](#First and Next Expressions)  and 
- [`next`](#First and Next Expressions) 
+ [`first`](#first-and-next-expressions)  and 
+ [`next`](#first-and-next-expressions) 
  allows to refine the text extracted from the first and next log lines.
-  [`delimiter`](#Delimiter) allows you to specify the
- text used to join the log lines. [`max_wait`](#Max Wait) limit the time a multilog line cab be hold by the parser.
+  [`separator`](#separator) allows you to specify the
+ text used to join the log lines. [`max_idle_duration`](#max-idle-duration) limit the time a multilog line cab be hold by the parser.
   Only `mode`and `expression` are required. 
   
-  You can view some typical examples [here](#Common Examples).
+  You can view some typical examples [here](#common-examples).
 
-## Max Wait
+## Max Idle Duration
 
-A `max_wait` config is provided in order to not hold the grouping lines too much: 
+A `max_idle_duration` config is provided in order to not hold the grouping lines too much: 
 - The parser cannot determine when the next line is part of the current line group or not until the next line is parsed.
 - For the "Continue Mode" there is not guarantee that the continued log line will appear soon, if ever. 
 
-The `max_wait` must not be greater than the position sync period (`positions.sync-period`). *The lines in the grouping 
-phase could be lost if some crash occurs when the position of the first line of the multiline log is sync to disk*.
+The `max_idle_duration` must not be greater than the position sync period (`positions.sync-period`). 
+*The lines in the grouping  phase could be lost if some crash occurs when the position of the first line of the multiline log is sync to disk*.
 
-The default value for `max_wait` is "5s".  
+The default value for `max_idle_duration` is "5s".  
 
 ## First and Next Expressions
 
@@ -44,13 +44,13 @@ Sometimes you need to filter the log lines. You can use `first` regular expresio
 first line of the multiline log. You can use `next` regular expression to select the text to be added to the multiline
 log. 
 
-## Delimiter 
+## Separator 
 
 The `delimiter` text is added between lines. So, for example you can use `delimiter: '\n'` to preserve line breaks. The
 default delimiter is empty.
 
 
-## Multiline modes
+## Multiline Modes
 
 The parses has defined some modes of operation to ease the use of distinct use cases in which a multiline parser
  is required. This modes are:

@@ -66,7 +66,7 @@ func TestMultilineModes(t *testing.T) {
 			Config{
 				Mode:       "continue",
 				Expression: `(.*)\\$`,
-				Delimiter:  " ",
+				Separator:  " ",
 			},
 			[]string{
 				`event\`,
@@ -87,7 +87,7 @@ func TestMultilineModes(t *testing.T) {
 				Mode:               "continue",
 				Expression:         `(.*)\\$`,
 				NextLineExpression: `BLA.\s(.*)$`,
-				Delimiter:          " ",
+				Separator:          " ",
 			},
 			[]string{
 				`BLA1 event\`,
@@ -157,7 +157,7 @@ func TestMultilineModes(t *testing.T) {
 			Config{
 				Mode:       "group",
 				Expression: `(G:\S+).*(H:\S+)`,
-				Delimiter:  " ",
+				Separator:  " ",
 			},
 			[]string{`1 G:1 event H:2 rest1`,
 				`2 G:1 one H:2 rest2`,
@@ -174,7 +174,7 @@ func TestMultilineModes(t *testing.T) {
 			Config{
 				Mode:       "newline",
 				Expression: `^\[.*] - `,
-				Delimiter:  "\n",
+				Separator:  "\n",
 			},
 			append(strings.Split(javaLogLine1, "\n"), javaLogLine2),
 			[]string{javaLogLine1, javaLogLine2},
@@ -184,7 +184,7 @@ func TestMultilineModes(t *testing.T) {
 			Config{
 				Mode:       "newline",
 				Expression: `^\[.*]`,
-				Delimiter:  "\n",
+				Separator:  "\n",
 			},
 			append(strings.Split(pythonLogLine1, "\n"), pythonLogLine2),
 			[]string{pythonLogLine1, pythonLogLine2},
@@ -194,10 +194,31 @@ func TestMultilineModes(t *testing.T) {
 			Config{
 				Mode:       "newline",
 				Expression: `^$`,
-				Delimiter:  "\n",
+				Separator:  "\n",
 			},
 			append(append(strings.Split(aptHistoryLogLine1, "\n"), aptHistoryLogLine2), strings.Split(aptHistoryLogLine3, "\n")...),
 			[]string{aptHistoryLogLine1, aptHistoryLogLine3},
+			"",
+		},
+
+		"named line as separator": {
+			Config{
+				Mode:                "newline",
+				Expression:          `^SEP$`,
+				FirstLineExpression: `^$`, // remove first line
+				Separator:           "\n",
+			},
+			[]string{
+				"line A-1",
+				"line A-2",
+				"SEP",
+				"line B-1",
+				"line B-2",
+			},
+			[]string{
+				"line A-1\nline A-2",
+				"line B-1\nline B-2",
+			},
 			"",
 		},
 	}
@@ -205,11 +226,11 @@ func TestMultilineModes(t *testing.T) {
 	for testName, testData := range tests {
 		testData := testData
 		t.Run(testName, func(t *testing.T) {
-			//	t.Parallel()
+			t.Parallel()
 
 			ch := collectHandler{}
 
-			testData.config.MaxWait = "1000s"
+			testData.config.IdleDuration = "1000s"
 			pl, err := NewMultiLineParser(util.Logger, &testData.config, &ch)
 			if err != nil {
 				if testData.err != err.Error() {
@@ -248,9 +269,9 @@ func TestMultilineModes(t *testing.T) {
 
 func TestMultilineTimeout(t *testing.T) {
 	cfg := Config{
-		Mode:       "continue",
-		Expression: `(.*)\\$`,
-		MaxWait:    "10ms",
+		Mode:         "continue",
+		Expression:   `(.*)\\$`,
+		IdleDuration: "10ms",
 	}
 	logLines := []string{
 		`event \`,
@@ -283,9 +304,9 @@ func TestMultilineTimeout(t *testing.T) {
 
 func TestMultilineMultiTrackTimeout(t *testing.T) {
 	cfg := Config{
-		Mode:       "group",
-		Expression: `(K:\S+)`,
-		MaxWait:    "10ms",
+		Mode:         "group",
+		Expression:   `(K:\S+)`,
+		IdleDuration: "10ms",
 	}
 	logLines := []string{
 		`K:1 line1`,
