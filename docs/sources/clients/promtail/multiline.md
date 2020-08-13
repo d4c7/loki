@@ -36,7 +36,7 @@ A `max_wait` config is provided in order to not hold the grouping lines too much
 The `max_wait` must not be greater than the position sync period (`positions.sync-period`). *The lines in the grouping 
 phase could be lost if some crash occurs when the position of the first line of the multiline log is sync to disk*.
 
-The default value for `max_wait` is "5s".
+The default value for `max_wait` is "5s". You can disable the max wait using a zero duration.
 
 ## First and Next Expressions
 
@@ -288,5 +288,43 @@ Caused by: MidLevelException: LowLevelException
       delimiter: '\n
 ```
 
+## Apt History Log
 
+Apt history logs are multiline entries separated by an empty line
 
+```
+Start-Date: 2020-05-15  14:46:48
+Commandline: /usr/bin/apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install docker-ce
+Install: containerd.io:amd64 (1.2.13-2, automatic), docker-ce:amd64 (5:19.03.8~3-0~ubuntu-bionic), docker-ce-cli:amd64 (5:19.03.8~3-0~ubuntu-bionic, automatic)
+End-Date: 2020-05-15  14:47:04
+
+Start-Date: 2020-05-16  06:06:29
+Commandline: /usr/bin/unattended-upgrade
+Upgrade: apt-transport-https:amd64 (1.6.12, 1.6.12ubuntu0.1)
+End-Date: 2020-05-16  06:06:30
+```
+
+Suggested config:
+
+```yaml
+   multiline_parser:
+      mode: "newline"
+      expression: '^$' 
+      delimiter: '\n
+```
+
+Parsed Log Line 1:
+```
+Start-Date: 2020-05-15  14:46:48
+Commandline: /usr/bin/apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install docker-ce
+Install: containerd.io:amd64 (1.2.13-2, automatic), docker-ce:amd64 (5:19.03.8~3-0~ubuntu-bionic), docker-ce-cli:amd64 (5:19.03.8~3-0~ubuntu-bionic, automatic)
+End-Date: 2020-05-15  14:47:04
+```
+
+Parsed Log Line 2:
+```
+Start-Date: 2020-05-16  06:06:29
+Commandline: /usr/bin/unattended-upgrade
+Upgrade: apt-transport-https:amd64 (1.6.12, 1.6.12ubuntu0.1)
+End-Date: 2020-05-16  06:06:30
+```

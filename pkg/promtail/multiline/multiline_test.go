@@ -30,6 +30,18 @@ Caused by: MidLevelException: LowLevelException
 	at Junk.a(Junk.java:11)
 	... 1 more`
 	javaLogLine2 = `[2019-08-13 22:00:13 GMT] - [main] INFO  c.i.b.w.w.WebAdapterAgent: All services are now up and running`
+
+	aptHistoryLogLine1 = `Start-Date: 2020-05-15  14:46:48
+Commandline: /usr/bin/apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install docker-ce
+Install: containerd.io:amd64 (1.2.13-2, automatic), docker-ce:amd64 (5:19.03.8~3-0~ubuntu-bionic), docker-ce-cli:amd64 (5:19.03.8~3-0~ubuntu-bionic, automatic)
+End-Date: 2020-05-15  14:47:04`
+
+	aptHistoryLogLine2 = ``
+
+	aptHistoryLogLine3 = `Start-Date: 2020-05-16  06:06:29
+Commandline: /usr/bin/unattended-upgrade
+Upgrade: apt-transport-https:amd64 (1.6.12, 1.6.12ubuntu0.1)
+End-Date: 2020-05-16  06:06:30`
 )
 
 type collectHandler struct {
@@ -176,6 +188,16 @@ func TestMultilineModes(t *testing.T) {
 			},
 			append(strings.Split(pythonLogLine1, "\n"), pythonLogLine2),
 			[]string{pythonLogLine1, pythonLogLine2},
+			"",
+		},
+		"apt log history": {
+			Config{
+				Mode:       "newline",
+				Expression: `^$`,
+				Delimiter:  "\n",
+			},
+			append(append(strings.Split(aptHistoryLogLine1, "\n"), aptHistoryLogLine2), strings.Split(aptHistoryLogLine3, "\n")...),
+			[]string{aptHistoryLogLine1, aptHistoryLogLine3},
 			"",
 		},
 	}

@@ -23,44 +23,105 @@ const (
 	ErrMultiLineUnvalidMaxWaitTime             = "invalid max_wait_time duration"
 )
 
+// FlushableEntryHandler is an api.EntryHandler that allows to flush buffered log lines
 type FlushableEntryHandler interface {
+	//Flush orders the immediate drain of the log entries retained
 	Flush() error
+
 	api.EntryHandler
 }
 
-//note log lines could be lost if MaxWait > positions.sync-period ( def 10*time.Second)
+// Note log lines could be lost if MaxWait > positions.sync-period ( def 10*time.Second)
 type Config struct {
-	Expression          string `yaml:"expression"`
+	// Mode determines the main behaviour of the parser. Possible values are:
+	// * newline: a new multiline entry starts when a line match a expression
+	// * continue: a multiline entry continue with the next log line if the expression match
+	// * group: multiline entries are grouped by extracting a group key of each line
+	// * unordered_group: like group mode but supporting mixed lines with different group keys
+	Mode string `yaml:"mode"`
+
+	// Expression is the main regular expression used for the selected mode of parsing
+	Expression string `yaml:"expression"`
+
+	// FirstLineExpression is a regular expression for capturing groups to form the first log line of the multiline log
 	FirstLineExpression string `yaml:"first"`
-	NextLineExpression  string `yaml:"next"`
-	MaxWait             string `yaml:"max_wait"`
-	Delimiter           string `yaml:"delimiter"`
-	Mode                string `yaml:"mode"`
+
+	// NextLineExpression is argular expression for capturing groups to form the second and more log lines of the
+	// multiline log
+	NextLineExpression string `yaml:"next"`
+
+	// Max duration a multiline log line is hold before sending it to the next handler. Note The parser cannot determine
+	// when the next line is part of the current line group or not until the next line is parsed. Even for the
+	// 'continue' mode there is not guarantee that the continued log line will appear soon, if ever.
+	// MaxWait should not be greater than the position sync period (`positions.sync-period`) so no logs are lost if
+	// some crash occurs when the position of the first line of the multiline log is sync to disk*.
+	// The MaxWait is calculated from the time the first line of the multiline log is added and not updates for each new
+	// log line appended. The default value is "5s". You can disable the max wait using a zero duration.
+	MaxWait string `yaml:"max_wait"`
+
+	// Delimiter text is added between lines of the multiline entry, e.g. you can use `delimiter: '\n'` to preserve
+	// line breaks on the entry. The default delimiter is empty.
+	Delimiter string `yaml:"delimiter"`
 }
 
 type multiLineParser struct {
-	cfg             *Config
-	logger          log.Logger
+	// modeHandler with specific parsing instructions. There is a handler for each parsing `Config Mode`.
+	modeHandler func(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) error
+
+	// compiled regexp for `Config Expression`
 	expressionRegex *regexp.Regexp
-	firstLineRegex  *regexp.Regexp
-	nextLineRegex   *regexp.Regexp
-	multitrack      bool
-	multilines      []*multilineEntry
-	multiline       *multilineEntry
-	quit            chan bool
-	maxWait         time.Duration
-	next            api.EntryHandler
-	handler         func(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) error
+
+	// compiled regexp for `Config FirstLineExpression`
+	firstLineRegex *regexp.Regexp
+
+	// compiled regexp for `Config NextLineExpression`
+	nextLineRegex *regexp.Regexp
+
+	// maxWait define the max time a multiline entry will be wait for new lines. It's a go duration parsing of
+	// `Config MaxWait`
+	maxWait time.Duration
+
+	// i.e. `Config Delimiter`
+	separator string
+
+	// log with context multiline keyvals
+	logger log.Logger
+
+	// multitrack determines if the parser can manage multiple multiline entries at the same time
+	multitrack bool
+
+	// multilines is used when `multitrack=true`
+	multilines []*multilineEntry
+
+	// multilines is used when `multitrack=false`
+	multiline *multilineEntry
+
+	// flusher ticker check that tracked multiline log entries not exceeded the max time they can be retained as
+	// specified by `maxWait`. Interval is half `maxWait`.
+	flusher *time.Ticker
+
+	// next os the entry handler use to handle the parsed multiline log entries
+	next api.EntryHandler
+
+	// concurrency control for `multilines`, `multiline` and handling entries
 	sync.Mutex
 }
 
+// multilineEntry manages a multiline log entry
 type multilineEntry struct {
+	// enrollTime is the time the first log line was set
 	enrollTime time.Time
-	labels     model.LabelSet
-	timestamp  time.Time
-	key        string
-	entry      string
-	lines      int
+	// entry labels, updated for each log line added
+	labels model.LabelSet
+	// timestamp of the *first* log line entry. so, the timestamp send to the `next` handler  will  be the timestamp of
+	// the first log line
+	timestamp time.Time
+	// this multine log entry group key
+	key string
+	// text of the log lines concatenated
+	entry string
+	// number of log lines contained in this entry
+	lines int
 }
 
 func (d *multilineEntry) reset() {
@@ -69,7 +130,9 @@ func (d *multilineEntry) reset() {
 	d.lines = 0
 }
 
-func (d *multilineEntry) set(labels model.LabelSet, t time.Time, entry string) {
+// inits the multiline entry with the values provided. The struct will contain exactly one log line after this call
+func (d *multilineEntry) init(labels model.LabelSet, t time.Time, entry string) {
+	// labels should not be nil never, preserve only clone when confirmed
 	if labels != nil {
 		d.labels = labels.Clone()
 	} else {
@@ -81,6 +144,7 @@ func (d *multilineEntry) set(labels model.LabelSet, t time.Time, entry string) {
 	d.enrollTime = time.Now()
 }
 
+// append a line to the multi log line entry and merge the labels
 func (d *multilineEntry) append(labels model.LabelSet, entry string, delimiter string) {
 	d.labels = labels.Merge(labels)
 	d.entry = join(d.entry, delimiter, entry)
@@ -89,7 +153,6 @@ func (d *multilineEntry) append(labels model.LabelSet, entry string, delimiter s
 
 func (c *multiLineParser) startFlusher() {
 	flusher := time.NewTicker(c.maxWait / 2)
-	quit := make(chan bool)
 	go func() {
 		for {
 			select {
@@ -98,41 +161,46 @@ func (c *multiLineParser) startFlusher() {
 				if err != nil {
 					level.Debug(c.logger).Log("msg", "failed to flush multiline logs", "err", err)
 				}
-			case <-quit:
-				flusher.Stop()
-				return
 			}
 		}
 	}()
-	c.quit = quit
+	c.flusher = flusher
 }
 
+// Flush force continuation to the handler of the retained multiline log entries
 func (c *multiLineParser) Flush() error {
 	return c.flush(true)
 }
 
 func (c *multiLineParser) flush(force bool) error {
 	now := time.Now()
+
 	c.Lock()
 	var err util.MultiError
-
 	if c.multitrack {
+		// a new list is built with the valid entries
 		nextGen := make([]*multilineEntry, 0, len(c.multilines))
+		// check each multiline entry
 		for _, t := range c.multilines {
+			// remove multilog entries with no lines
 			if t.lines == 0 {
 				continue
 			}
+			// handle entries if forced or it's out of validity range
 			if force || now.Sub(t.enrollTime) > c.maxWait {
 				err.Add(c.next.Handle(t.labels, t.timestamp, t.entry))
 			} else {
+				// append the entry to the next gen list if the entry is valid yet
 				nextGen = append(nextGen, t)
 			}
 		}
+		// assign the next gen list
 		c.multilines = nextGen
 	} else {
 		t := c.multiline
 		if t.lines > 0 && (force || now.Sub(t.enrollTime) > c.maxWait) {
 			err.Add(c.next.Handle(t.labels, t.timestamp, t.entry))
+			// reuse struct
 			t.reset()
 		}
 	}
@@ -140,16 +208,21 @@ func (c *multiLineParser) flush(force bool) error {
 	return err.Err()
 }
 
+// NewMultiLineParser construct a new multiline parser
 func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler) (FlushableEntryHandler, error) {
 	if config == nil {
 		return nil, errors.New(ErrEmptyMultiLineConfig)
 	}
+	ml := &multiLineParser{}
 
-	ml := &multiLineParser{
-		cfg:    config,
-		logger: log.With(logger, "component", "multiline"),
+	// log config
+	if logger == nil {
+		logger = log.NewNopLogger()
+	} else {
+		ml.logger = log.With(logger, "component", "multiline")
 	}
 
+	// expression config
 	if len(config.Expression) > 0 {
 		expr, err := regexp.Compile(config.Expression)
 		if err != nil {
@@ -160,6 +233,7 @@ func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler
 		return nil, errors.New(ErrCouldMultiLineExpressionRequiredRegex)
 	}
 
+	// first line expression config
 	if len(config.FirstLineExpression) > 0 {
 		expr, err := regexp.Compile(config.FirstLineExpression)
 		if err != nil {
@@ -168,6 +242,7 @@ func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler
 		ml.firstLineRegex = expr
 	}
 
+	// next line expression config
 	if len(config.NextLineExpression) > 0 {
 		expr, err := regexp.Compile(config.NextLineExpression)
 		if err != nil {
@@ -176,6 +251,7 @@ func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler
 		ml.nextLineRegex = expr
 	}
 
+	// max wait config
 	ml.maxWait = 5 * time.Second
 	if config.MaxWait != "" {
 		var err error
@@ -190,16 +266,21 @@ func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler
 		level.Warn(ml.logger).Log("msg", "multiline flusher disabled")
 	}
 
+	// separator config
+
+	ml.separator = config.Delimiter
+
+	// mode and multitrack config
 	switch config.Mode {
 	case "newline":
-		ml.handler = handleNewLineMode
+		ml.modeHandler = handleNewLineMode
 	case "group":
-		ml.handler = handleGroupMode
+		ml.modeHandler = handleGroupMode
 	case "unordered_group":
-		ml.handler = handleUnorderedGroupMode
+		ml.modeHandler = handleUnorderedGroupMode
 		ml.multitrack = true
 	case "continue":
-		ml.handler = handleContinueMode
+		ml.modeHandler = handleContinueMode
 	default:
 		return nil, errors.New(ErrMultiLineUnsupportedMode)
 	}
@@ -210,6 +291,7 @@ func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler
 		ml.multiline = newLine("")
 	}
 
+	// next handler config
 	if next == nil {
 		level.Warn(ml.logger).Log("msg", "multiline next handler is not defined")
 		next = api.EntryHandlerFunc(func(labels model.LabelSet, time time.Time, entry string) error {
@@ -222,35 +304,58 @@ func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler
 	return ml, nil
 }
 
+// Handler for newline mode. Lines are appended until a new line regular expression match
 func handleNewLineMode(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) (err error) {
-	d := c.multiline
+	//continue mode handler is not multitrack
+	ml := c.multiline
+
 	if !c.expressionRegex.Match([]byte(entry)) {
-		d.append(labels, selection(c.nextLineRegex, entry), c.cfg.Delimiter)
+		// `entry` is not a new line
+		// if there is a next line regular expression use it to append the captured text  to the multiline entry
+		// if not append `entry` to the multiline entry
+		ml.append(labels, selection(c.nextLineRegex, entry), c.separator)
 	} else {
-		if d.lines > 0 {
-			err = c.next.Handle(d.labels, d.timestamp, d.entry)
+		// `entry` is a new line
+		// if a previous multiline entry exists (i.e. has lines) then handle it
+		if ml.lines > 0 {
+			//handle multiline entry content
+			err = c.next.Handle(ml.labels, ml.timestamp, ml.entry)
 		}
-		d.set(labels, t, selection(c.firstLineRegex, entry))
+		// init a new multiline entry
+		// overrides previous struct to reduce allocation
+		ml.init(labels, t, selection(c.firstLineRegex, entry))
 	}
 	return
 }
 
+// Handler for group mode. Lines are appended by the extracted group key of the lines
 func handleGroupMode(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) (err error) {
+	// group mode handler is not multitrack
+	ml := c.multiline
+	// extract the group key `key` and the text minus the group key `inv `from the line
 	key, inv := disjoint(c.expressionRegex, entry)
-	d := c.multiline
-	if d.key == key {
-		d.labels = labels.Merge(labels)
+	if ml.key == key {
+		// the group key i.e. to the previous line, so we're going to append a new line
+		// the default line to appended is the line without the group key to avoid repetition
 		line := inv
+		// however if there is a next line regular expression the text to append is the capturing groups of the
+		// regular expression
 		if c.nextLineRegex != nil {
 			line = selection(c.nextLineRegex, entry)
 		}
-		d.append(labels, line, c.cfg.Delimiter)
+		//append the line
+		ml.append(labels, line, c.separator)
 	} else {
-		if d.lines > 0 {
-			err = c.next.Handle(d.labels, d.timestamp, d.entry)
+		// the group key is not equal to the previous line
+		// handle the previous multiline entry if there is any
+		if ml.lines > 0 {
+			err = c.next.Handle(ml.labels, ml.timestamp, ml.entry)
 		}
-		d.set(labels, t, selection(c.firstLineRegex, entry))
-		d.key = key
+		// init a new multiline entry with the log text or capturing groups if first line regular expression is defined
+		// overrides previous struct to reduce allocation
+		ml.init(labels, t, selection(c.firstLineRegex, entry))
+		//update multiline entry group key
+		ml.key = key
 	}
 	return
 }
@@ -264,9 +369,9 @@ func handleUnorderedGroupMode(c *multiLineParser, labels model.LabelSet, t time.
 		if c.nextLineRegex != nil {
 			line = selection(c.nextLineRegex, entry)
 		}
-		d.append(labels, line, c.cfg.Delimiter)
+		d.append(labels, line, c.separator)
 	} else {
-		d.set(labels, t, selection(c.firstLineRegex, entry))
+		d.init(labels, t, selection(c.firstLineRegex, entry))
 		d.key = key
 	}
 	return
@@ -277,13 +382,13 @@ func handleContinueMode(c *multiLineParser, labels model.LabelSet, t time.Time, 
 	line := selection(c.expressionRegex, entry)
 	if line != "" {
 		if d.lines > 0 {
-			d.append(labels, selection(c.nextLineRegex, line), c.cfg.Delimiter)
+			d.append(labels, selection(c.nextLineRegex, line), c.separator)
 		} else {
-			d.set(labels, t, selection(c.firstLineRegex, line))
+			d.init(labels, t, selection(c.firstLineRegex, line))
 		}
 	} else {
 		if d.lines > 0 {
-			d.append(labels, selection(c.nextLineRegex, entry), c.cfg.Delimiter)
+			d.append(labels, selection(c.nextLineRegex, entry), c.separator)
 			err = c.next.Handle(d.labels, d.timestamp, d.entry)
 			d.reset()
 		} else {
@@ -295,7 +400,7 @@ func handleContinueMode(c *multiLineParser, labels model.LabelSet, t time.Time, 
 
 func (c *multiLineParser) Handle(labels model.LabelSet, t time.Time, entry string) (err error) {
 	c.Lock()
-	err = c.handler(c, labels, t, entry)
+	err = c.modeHandler(c, labels, t, entry)
 	c.Unlock()
 	return
 }
