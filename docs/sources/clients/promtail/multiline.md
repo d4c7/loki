@@ -36,7 +36,7 @@ A `max_wait` config is provided in order to not hold the grouping lines too much
 The `max_wait` must not be greater than the position sync period (`positions.sync-period`). *The lines in the grouping 
 phase could be lost if some crash occurs when the position of the first line of the multiline log is sync to disk*.
 
-The default value for `max_wait` is "5s". You can disable the max wait using a zero duration.
+The default value for `max_wait` is "5s".  
 
 ## First and Next Expressions
 

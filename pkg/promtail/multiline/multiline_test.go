@@ -209,7 +209,7 @@ func TestMultilineModes(t *testing.T) {
 
 			ch := collectHandler{}
 
-			testData.config.MaxWait = "0s"
+			testData.config.MaxWait = "1000s"
 			pl, err := NewMultiLineParser(util.Logger, &testData.config, &ch)
 			if err != nil {
 				if testData.err != err.Error() {
@@ -226,10 +226,11 @@ func TestMultilineModes(t *testing.T) {
 					t.Failed()
 				}
 			}
-			err = pl.Flush()
+			err = pl.Stop()
 			if err != nil {
 				t.Failed()
 			}
+
 			for i, n, cl := 0, len(testData.expectedLines), len(ch.lines); i < n; i++ {
 				if i >= cl {
 					assert.Fail(t, "<missing line> '"+testData.expectedLines[i]+"'")
