@@ -51,6 +51,7 @@ func NewHistograms(name, help string, config interface{}, maxIdleSec int64) (*Hi
 				Buckets:     cfg.Buckets,
 			}),
 				0,
+				nil,
 			}
 		}, maxIdleSec),
 		Cfg: cfg,
@@ -64,7 +65,8 @@ func (h *Histograms) With(labels model.LabelSet) prometheus.Histogram {
 
 type expiringHistogram struct {
 	prometheus.Histogram
-	lastModSec int64
+	lastModSec        int64
+	explicitTimestamp *time.Time
 }
 
 // Observe adds a single observation to the histogram.
@@ -76,4 +78,16 @@ func (h *expiringHistogram) Observe(val float64) {
 // HasExpired implements Expirable
 func (h *expiringHistogram) HasExpired(currentTimeSec int64, maxAgeSec int64) bool {
 	return currentTimeSec-h.lastModSec >= maxAgeSec
+}
+
+// Timestamp implements TimeExplicit
+func (h *expiringHistogram) Timestamp() *time.Time {
+	return h.explicitTimestamp
+}
+
+// ApplyTimestamp implements TimeExplicit
+func (h *expiringHistogram) ApplyTimestamp(t *time.Time) {
+	if t != nil && h.explicitTimestamp == nil || t.After(*h.explicitTimestamp) {
+		h.explicitTimestamp = t
+	}
 }

@@ -457,3 +457,102 @@ promtail_custom_response_time_ms_count{baz="fu",fu="baz"} 1.0
 promtail_custom_total_keys{bar="foo",foo="bar"} 8.0
 promtail_custom_total_keys{baz="fu",fu="baz"} 8.0
 `
+
+var testMetricTimestampedYaml = `
+pipeline_stages:
+- json:
+    expressions:
+      app: app
+      time: time
+      payload: payload
+- timestamp:
+    source: time
+    format: "2006-01-02T15:04:05-0700"
+- metrics:
+    timestamped_count:
+      type: Counter
+      explicit_timestamps: true
+      description: uhhhhhhh_ahhhhhh
+      prefix: my_promtail_custom_
+      source: app
+      config:
+        value: loki
+        action: inc
+    timestamped_bloki_count:
+      type: Gauge
+      explicit_timestamps: true
+      description: blerrrgh
+      source: app
+      config:
+        value: bloki
+        action: dec  
+    timestamped_payload_size_bytes:
+      type: Histogram
+      explicit_timestamps: true
+      description: grrrragh
+      source: payload
+      config:
+        buckets: [10, 20]
+`
+
+const expectedTimestampedMetrics = ` # HELP my_promtail_custom_timestamped_count uhhhhhhh_ahhhhhh
+        # TYPE my_promtail_custom_timestamped_count counter
+        my_promtail_custom_timestamped_count{test="app"} 1 1351807721000
+        # HELP promtail_custom_timestamped_bloki_count blerrrgh
+        # TYPE promtail_custom_timestamped_bloki_count gauge
+        promtail_custom_timestamped_bloki_count{test="app"} -1 1351807721000
+        # HELP promtail_custom_timestamped_payload_size_bytes grrrragh
+        # TYPE promtail_custom_timestamped_payload_size_bytes histogram
+        promtail_custom_timestamped_payload_size_bytes_bucket{test="app",le="10"} 1 1351807721000
+        promtail_custom_timestamped_payload_size_bytes_bucket{test="app",le="20"} 3 1351807721000
+        promtail_custom_timestamped_payload_size_bytes_bucket{test="app",le="+Inf"} 3 1351807721000
+        promtail_custom_timestamped_payload_size_bytes_sum{test="app"} 50 1351807721000
+        promtail_custom_timestamped_payload_size_bytes_count{test="app"} 3 1351807721000
+`
+
+func TestMetricsTimestamped(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	pl, err := NewPipeline(util.Logger, loadConfig(testMetricTimestampedYaml), nil, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lbls := model.LabelSet{}
+	lbls["test"] = "app"
+	ts := time.Now()
+	extracted := map[string]interface{}{}
+	entry := `
+{
+	"time":"2012-11-01T22:08:41+0000",
+	"app":"loki",
+    "payload": 10,
+	"component": ["parser","type"],
+	"level" : "WARN"
+}`
+	pl.Process(lbls, extracted, &ts, &entry)
+
+	entry = `
+{
+	"time":"2012-11-01T22:08:41+0000",
+	"app":"bloki",
+    "payload": 20,
+	"component": ["parser","type"],
+	"level" : "WARN"
+}
+`
+	pl.Process(lbls, extracted, &ts, &entry)
+
+	entry = `
+{
+	"time":"2012-11-01T22:08:41+0000",
+	"payload": 20,
+	"component": ["parser","type"],
+	"level" : "WARN"
+}`
+
+	pl.Process(lbls, extracted, &ts, &entry)
+
+	if err := testutil.GatherAndCompare(registry,
+		strings.NewReader(expectedTimestampedMetrics)); err != nil {
+		t.Fatalf("mismatch metrics: %v", err)
+	}
+}
