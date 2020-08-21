@@ -142,7 +142,9 @@ func (r *regexStage) Process(labels model.LabelSet, extracted map[string]interfa
 	} else {
 		join := *r.cfg.Coalesce
 		l := extractReg(r.expression, *input, *r.cfg.DeDup)
-		extracted[join] = l
+		if len(l) > 0 {
+			extracted[join] = l
+		}
 	}
 
 }
