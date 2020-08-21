@@ -3,6 +3,7 @@ package file
 import (
 	"context"
 	"fmt"
+	"github.com/grafana/loki/pkg/promtail/multiline"
 	"os"
 	"strings"
 	"sync"
@@ -136,6 +137,16 @@ func NewFileTargetManager(
 			}
 		}
 
+		finalHandler := pipeline.Wrap(client)
+
+		// Add a multiline parser
+		if cfg.MultiLineParser != nil {
+			finalHandler, err = multiline.NewMultiLineParser(logger, cfg.MultiLineParser, finalHandler)
+			if err != nil {
+				return nil, err
+			}
+
+		}
 		s := &targetSyncer{
 			log:            logger,
 			positions:      positions,
@@ -143,7 +154,7 @@ func NewFileTargetManager(
 			targets:        map[string]*FileTarget{},
 			droppedTargets: []target.Target{},
 			hostname:       hostname,
-			entryHandler:   pipeline.Wrap(client),
+			entryHandler:   finalHandler,
 			targetConfig:   targetConfig,
 		}
 		tm.syncers[cfg.JobName] = s

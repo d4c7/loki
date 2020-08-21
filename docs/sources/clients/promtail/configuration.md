@@ -14,6 +14,7 @@ and how to scrape logs from files.
   - [client_config](#client_config)
   - [position_config](#position_config)
   - [scrape_config](#scrape_config)
+    - [multiline_parser_config](#multiline_parser_config)
     - [pipeline_stages](#pipeline_stages)
       - [docker](#docker)
       - [cri](#cri)
@@ -303,6 +304,9 @@ job_name: <string>
 # Deprecated in favor of pipeline_stages using the cri or docker stages.
 [entry_parser: <string> | default = "docker"]
 
+# Describes how to parse multiline log lines. 
+[multiline_parser: <multiline_parser_config>]
+
 # Describes how to transform logs from targets.
 [pipeline_stages: <pipeline_stages>]
 
@@ -333,6 +337,12 @@ file_sd_configs:
 kubernetes_sd_configs:
   - [<kubernetes_sd_config>]
 ```
+
+### multiline_parser_config
+
+The [multiline_parser_config](../multiline) section is used to treat groups of log lines as single lines for the
+pipeline stages. 
+
 
 ### pipeline_stages
 

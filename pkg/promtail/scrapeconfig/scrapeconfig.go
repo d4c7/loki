@@ -2,6 +2,7 @@ package scrapeconfig
 
 import (
 	"fmt"
+	"github.com/grafana/loki/pkg/promtail/multiline"
 	"reflect"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 type Config struct {
 	JobName                string                           `yaml:"job_name,omitempty"`
 	EntryParser            api.EntryParser                  `yaml:"entry_parser"`
+	MultiLineParser        *multiline.Config                `yaml:"multiline_parser"`
 	PipelineStages         stages.PipelineStages            `yaml:"pipeline_stages,omitempty"`
 	JournalConfig          *JournalTargetConfig             `yaml:"journal,omitempty"`
 	SyslogConfig           *SyslogTargetConfig              `yaml:"syslog,omitempty"`
