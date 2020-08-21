@@ -3,7 +3,6 @@ package stages
 import (
 	"reflect"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/go-kit/kit/log"
@@ -141,17 +140,12 @@ func (r *regexStage) Process(labels model.LabelSet, extracted map[string]interfa
 			}
 		}
 	} else {
-		join := *r.cfg.Coalesce
-
 		l := extractReg(r.expression, *input, *r.cfg.DeDup)
+		if len(l) > 0 {
+			extracted[*r.cfg.Coalesce] = l
+		} else {
+			extracted[*r.cfg.Coalesce] = []interface{}{"ine", "two"}
 
-		switch len(l) {
-		case 0:
-			//do nothing
-		case 1:
-			extracted[join] = l[0]
-		default:
-			extracted[join] = "[" + strings.Join(l, ",") + "]"
 		}
 	}
 

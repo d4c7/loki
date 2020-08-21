@@ -219,3 +219,8 @@ Action stages:
 Filtering stages:
 
   * [match](../stages/match/): Conditionally run stages based on the label set.
+
+
+Script stages:
+
+  * [match](../stages/script/): Run script stage.
