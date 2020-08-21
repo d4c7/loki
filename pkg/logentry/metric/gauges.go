@@ -74,6 +74,7 @@ func NewGauges(name, help string, config interface{}, maxIdleSec int64) (*Gauges
 				ConstLabels: labels,
 			}),
 				0,
+				nil,
 			}
 		}, maxIdleSec),
 		Cfg: cfg,
@@ -87,7 +88,8 @@ func (g *Gauges) With(labels model.LabelSet) prometheus.Gauge {
 
 type expiringGauge struct {
 	prometheus.Gauge
-	lastModSec int64
+	lastModSec        int64
+	explicitTimestamp *time.Time
 }
 
 // Set sets the Gauge to an arbitrary value.
@@ -133,4 +135,16 @@ func (g *expiringGauge) SetToCurrentTime() {
 // HasExpired implements Expirable
 func (g *expiringGauge) HasExpired(currentTimeSec int64, maxAgeSec int64) bool {
 	return currentTimeSec-g.lastModSec >= maxAgeSec
+}
+
+// Timestamp implements TimeExplicit
+func (g *expiringGauge) Timestamp() *time.Time {
+	return g.explicitTimestamp
+}
+
+// ApplyTimestamp implements TimeExplicit
+func (g *expiringGauge) ApplyTimestamp(t *time.Time) {
+	if t != nil && g.explicitTimestamp == nil || t.After(*g.explicitTimestamp) {
+		g.explicitTimestamp = t
+	}
 }

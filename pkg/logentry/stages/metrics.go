@@ -31,13 +31,14 @@ const (
 
 // MetricConfig is a single metrics configuration.
 type MetricConfig struct {
-	MetricType   string  `mapstructure:"type"`
-	Description  string  `mapstructure:"description"`
-	Source       *string `mapstructure:"source"`
-	Prefix       string  `mapstructure:"prefix"`
-	IdleDuration *string `mapstructure:"max_idle_duration"`
-	maxIdleSec   int64
-	Config       interface{} `mapstructure:"config"`
+	MetricType         string  `mapstructure:"type"`
+	Description        string  `mapstructure:"description"`
+	ExplicitTimestamps bool    `mapstructure:"explicit_timestamps"`
+	Source             *string `mapstructure:"source"`
+	Prefix             string  `mapstructure:"prefix"`
+	IdleDuration       *string `mapstructure:"max_idle_duration"`
+	maxIdleSec         int64
+	Config             interface{} `mapstructure:"config"`
 }
 
 // MetricsConfig is a set of configured metrics.
@@ -123,16 +124,17 @@ func newMetricStage(logger log.Logger, config interface{}, registry prometheus.R
 				return nil, err
 			}
 		}
-		if collector != nil {
-			registry.MustRegister(collector)
-			metrics[name] = collector
-		}
+		registry.MustRegister(collector)
+		metrics[name] = collector
+
 	}
-	return &metricStage{
+	ms := &metricStage{
 		logger:  logger,
 		cfg:     *cfgs,
 		metrics: metrics,
-	}, nil
+	}
+
+	return ms, nil
 }
 
 // metricStage creates and updates prometheus metrics based on extracted pipeline data
@@ -147,28 +149,34 @@ func (m *metricStage) Process(labels model.LabelSet, extracted map[string]interf
 	if _, ok := labels[dropLabel]; ok {
 		return
 	}
+
 	for name, collector := range m.metrics {
+		cfg := m.cfg[name]
+		var metricTimestamp *time.Time
+		if cfg.ExplicitTimestamps {
+			metricTimestamp = t
+		}
 		// There is a special case for counters where we count even if there is no match in the extracted map.
 		if c, ok := collector.(*metric.Counters); ok {
 			if c != nil && c.Cfg.MatchAll != nil && *c.Cfg.MatchAll {
 				if c.Cfg.CountBytes != nil && *c.Cfg.CountBytes {
 					if entry != nil {
-						m.recordCounter(name, c, labels, len(*entry))
+						m.recordCounter(name, c, labels, metricTimestamp, len(*entry))
 					}
 				} else {
-					m.recordCounter(name, c, labels, nil)
+					m.recordCounter(name, c, labels, metricTimestamp, nil)
 				}
 				continue
 			}
 		}
-		if v, ok := extracted[*m.cfg[name].Source]; ok {
+		if v, ok := extracted[*cfg.Source]; ok {
 			switch vec := collector.(type) {
 			case *metric.Counters:
-				m.recordCounter(name, vec, labels, v)
+				m.recordCounter(name, vec, labels, metricTimestamp, v)
 			case *metric.Gauges:
-				m.recordGauge(name, vec, labels, v)
+				m.recordGauge(name, vec, labels, metricTimestamp, v)
 			case *metric.Histograms:
-				m.recordHistogram(name, vec, labels, v)
+				m.recordHistogram(name, vec, labels, metricTimestamp, v)
 			}
 		} else {
 			level.Debug(m.logger).Log("msg", "source does not exist", "err", fmt.Sprintf("source: %s, does not exist", *m.cfg[name].Source))
@@ -182,7 +190,7 @@ func (m *metricStage) Name() string {
 }
 
 // recordCounter will update a counter metric
-func (m *metricStage) recordCounter(name string, counter *metric.Counters, labels model.LabelSet, v interface{}) {
+func (m *metricStage) recordCounter(name string, counter *metric.Counters, labels model.LabelSet, t *time.Time, v interface{}) {
 	// If value matching is defined, make sure value matches.
 	if counter.Cfg.Value != nil {
 		stringVal, err := getString(v)
@@ -199,9 +207,11 @@ func (m *metricStage) recordCounter(name string, counter *metric.Counters, label
 		}
 	}
 
+	labeledCounter := counter.With(labels)
+
 	switch counter.Cfg.Action {
 	case metric.CounterInc:
-		counter.With(labels).Inc()
+		labeledCounter.Inc()
 	case metric.CounterAdd:
 		f, err := getFloat(v)
 		if err != nil || f < 0 {
@@ -210,12 +220,17 @@ func (m *metricStage) recordCounter(name string, counter *metric.Counters, label
 			}
 			return
 		}
-		counter.With(labels).Add(f)
+		labeledCounter.Add(f)
 	}
+
+	if ts, ok := labeledCounter.(metric.ExplicitTimestamp); t != nil && ok {
+		ts.ApplyTimestamp(t)
+	}
+
 }
 
 // recordGauge will update a gauge metric
-func (m *metricStage) recordGauge(name string, gauge *metric.Gauges, labels model.LabelSet, v interface{}) {
+func (m *metricStage) recordGauge(name string, gauge *metric.Gauges, labels model.LabelSet, t *time.Time, v interface{}) {
 	// If value matching is defined, make sure value matches.
 	if gauge.Cfg.Value != nil {
 		stringVal, err := getString(v)
@@ -232,6 +247,7 @@ func (m *metricStage) recordGauge(name string, gauge *metric.Gauges, labels mode
 		}
 	}
 
+	gaugeLabeled := gauge.With(labels)
 	switch gauge.Cfg.Action {
 	case metric.GaugeSet:
 		f, err := getFloat(v)
@@ -241,11 +257,11 @@ func (m *metricStage) recordGauge(name string, gauge *metric.Gauges, labels mode
 			}
 			return
 		}
-		gauge.With(labels).Set(f)
+		gaugeLabeled.Set(f)
 	case metric.GaugeInc:
-		gauge.With(labels).Inc()
+		gaugeLabeled.Inc()
 	case metric.GaugeDec:
-		gauge.With(labels).Dec()
+		gaugeLabeled.Dec()
 	case metric.GaugeAdd:
 		f, err := getFloat(v)
 		if err != nil || f < 0 {
@@ -254,7 +270,7 @@ func (m *metricStage) recordGauge(name string, gauge *metric.Gauges, labels mode
 			}
 			return
 		}
-		gauge.With(labels).Add(f)
+		gaugeLabeled.Add(f)
 	case metric.GaugeSub:
 		f, err := getFloat(v)
 		if err != nil || f < 0 {
@@ -263,12 +279,19 @@ func (m *metricStage) recordGauge(name string, gauge *metric.Gauges, labels mode
 			}
 			return
 		}
-		gauge.With(labels).Sub(f)
+		if t != nil {
+			gaugeLabeled.Sub(f)
+		}
 	}
+
+	if ts, ok := gaugeLabeled.(metric.ExplicitTimestamp); t != nil && ok {
+		ts.ApplyTimestamp(t)
+	}
+
 }
 
 // recordHistogram will update a Histogram metric
-func (m *metricStage) recordHistogram(name string, histogram *metric.Histograms, labels model.LabelSet, v interface{}) {
+func (m *metricStage) recordHistogram(name string, histogram *metric.Histograms, labels model.LabelSet, t *time.Time, v interface{}) {
 	// If value matching is defined, make sure value matches.
 	if histogram.Cfg.Value != nil {
 		stringVal, err := getString(v)
@@ -291,7 +314,13 @@ func (m *metricStage) recordHistogram(name string, histogram *metric.Histograms,
 		}
 		return
 	}
-	histogram.With(labels).Observe(f)
+	histogramLabeled := histogram.With(labels)
+	histogramLabeled.Observe(f)
+
+	if ts, ok := histogramLabeled.(metric.ExplicitTimestamp); t != nil && ok {
+		ts.ApplyTimestamp(t)
+	}
+
 }
 
 // getFloat will take the provided value and return a float64 if possible

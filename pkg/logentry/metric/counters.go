@@ -81,6 +81,7 @@ func NewCounters(name, help string, config interface{}, maxIdleSec int64) (*Coun
 				ConstLabels: labels,
 			}),
 				0,
+				nil,
 			}
 		}, maxIdleSec),
 		Cfg: cfg,
@@ -94,7 +95,8 @@ func (c *Counters) With(labels model.LabelSet) prometheus.Counter {
 
 type expiringCounter struct {
 	prometheus.Counter
-	lastModSec int64
+	lastModSec        int64
+	explicitTimestamp *time.Time
 }
 
 // Inc increments the counter by 1. Use Add to increment it by arbitrary
@@ -114,4 +116,16 @@ func (e *expiringCounter) Add(val float64) {
 // HasExpired implements Expirable
 func (e *expiringCounter) HasExpired(currentTimeSec int64, maxAgeSec int64) bool {
 	return currentTimeSec-e.lastModSec >= maxAgeSec
+}
+
+// Timestamp implements TimeExplicit
+func (e *expiringCounter) Timestamp() *time.Time {
+	return e.explicitTimestamp
+}
+
+// ApplyTimestamp implements TimeExplicit
+func (e *expiringCounter) ApplyTimestamp(t *time.Time) {
+	if t != nil && e.explicitTimestamp == nil || t.After(*e.explicitTimestamp) {
+		e.explicitTimestamp = t
+	}
 }
