@@ -23,6 +23,7 @@ const (
 	StageTypeTemplate  = "template"
 	StageTypePipeline  = "pipeline"
 	StageTypeTenant    = "tenant"
+	StageTypeScript    = "script"
 )
 
 // Stage takes an existing set of labels, timestamp and log entry and returns either a possibly mutated
@@ -103,6 +104,11 @@ func New(logger log.Logger, jobName *string, stageType string,
 		}
 	case StageTypeReplace:
 		s, err = newReplaceStage(logger, cfg)
+		if err != nil {
+			return nil, err
+		}
+	case StageTypeScript:
+		s, err = newScriptStage(logger, cfg)
 		if err != nil {
 			return nil, err
 		}
