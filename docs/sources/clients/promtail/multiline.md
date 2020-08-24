@@ -12,7 +12,7 @@ A complete config file sample:
       expression: '^time:'
       first: '^(.*)$'
       next: '^\s+(.*)$' 
-      delimiter: ' '
+      separator: ' '
       max_idle_duration: '5s'
 ```
 
@@ -46,8 +46,8 @@ log.
 
 ## Separator 
 
-The `delimiter` text is added between lines. So, for example you can use `delimiter: '\n'` to preserve line breaks. The
-default delimiter is empty.
+The `separator` text is added between lines. So, for example you can use `separator: '\n'` to preserve line breaks. The
+default separator is empty.
 
 
 ## Multiline Modes
@@ -55,11 +55,12 @@ default delimiter is empty.
 The parses has defined some modes of operation to ease the use of distinct use cases in which a multiline parser
  is required. This modes are:
  
-- New Line Mode: A new multine starts when a "newline" regular expression match.
-- Continue Mode: A line that match a "continue" regular expresion are joined with the next one.
-- Group Mode: A "group" regular expression is used to determine the group a line belongs to.
-- Unordered Group Mode: This is a "Group Mode" but tracking multiple group keys simultaneously. So the lines can be
+- [New Line Mode](#new-line-mode): A new multine starts when a "newline" regular expression match.
+- [Continue Mode](#continue-mode): A line that match a "continue" regular expresion are joined with the next one.
+- [Group Mode](#group-mode): A "group" regular expression is used to determine the group a line belongs to.
+- [Unordered Group Mode](#unordered-group-mode): This is a "Group Mode" but tracking multiple group keys simultaneously. So the lines can be
  parsed unordered.
+- [JSON Mode](#json-mode): parses multiline json documents
 
 ### New Line Mode
 
@@ -92,14 +93,14 @@ log line 1    sub log line 1.1
 log line 2    sub log line 2.1
 ```
 
-We can use `next` regular expression to remove the prefix spaces and `delimiter` to separate joined lines with a space:
+We can use `next` regular expression to remove the prefix spaces and `separator` to separate joined lines with a space:
 
 ```yaml
    multiline_parser:
       mode: "newline"
       expression: '^[^ ]",'
       next: '^\s*(.*)$'
-      delimmiter: ' '
+      separator: ' '
 ```
 Parsing the previous log now gives:
 ```
@@ -242,6 +243,56 @@ request_id:1 log event one
 request_id:2 log event two
 ```
 
+
+
+
+# JSON Mode
+ 
+Sometimes you can use previous modes in order to separate multiple JSON documents. 
+However you can use this specific mode for this task.
+The JSON mode use a very relaxed json parser so it can handle invalid JSON documents.
+
+Note 1: The text between valid JSON documents is ignored. 
+
+Note 2: Multiple JSON documents in the same line generate as many lines as JSON docs found in the line
+
+#### Example:
+
+Given the following log lines:
+
+```json
+{
+  "_id": "1"
+}
+{
+  "_id": "2"
+}
+```
+
+We can define the multiline parser as:
+
+```yaml
+   multiline_parser:
+      mode: "json"
+      separator: "\n"
+```
+
+to obtain the next logs lines:
+
+```
+#line 1
+
+{
+  "_id": "1"
+}
+
+#line 2
+
+{
+  "_id": "2"
+}
+```
+
 ## Common Examples
 
 ## Python logs
@@ -263,7 +314,7 @@ Parser config:
    multiline_parser:
       mode: "newline"
       expression: '^\[.*] ' 
-      delimiter: '\n
+      separator: '\n
 ```
 
 ## Java logs
@@ -285,7 +336,7 @@ Caused by: MidLevelException: LowLevelException
    multiline_parser:
       mode: "newline"
       expression: '^\[.*] -' 
-      delimiter: '\n
+      separator: '\n
 ```
 
 ## Apt History Log
@@ -310,7 +361,7 @@ Suggested config:
    multiline_parser:
       mode: "newline"
       expression: '^$' 
-      delimiter: '\n
+      separator: '\n
 ```
 
 Parsed Log Line 1:
@@ -328,3 +379,4 @@ Commandline: /usr/bin/unattended-upgrade
 Upgrade: apt-transport-https:amd64 (1.6.12, 1.6.12ubuntu0.1)
 End-Date: 2020-05-16  06:06:30
 ```
+

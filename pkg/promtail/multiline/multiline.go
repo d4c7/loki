@@ -18,7 +18,6 @@ const (
 	ErrCouldNotCompileMultiLineExpressionRegex = "could not compile expression"
 	ErrCouldNotCompileMultiLineFirstLineRegex  = "could not compile first_expression"
 	ErrCouldNotCompileMultiLineNextLineRegex   = "could not compile next_expression"
-	ErrCouldMultiLineExpressionRequiredRegex   = "expression is required"
 	ErrMultiLineUnsupportedMode                = "unsupported mode"
 	ErrMultiLineUnvalidMaxWaitTime             = "invalid max_idle_duration duration"
 	ErrMultiLineModeRequireMaxWait             = "mode require max_idle_duration duration > 0 "
@@ -111,6 +110,11 @@ type multiLineParser struct {
 	// next os the entry handler use to handle the parsed multiline log entries
 	next api.EntryHandler
 
+	//json parser state
+	jsonState int
+	//json open brance counter
+	jsonObjectCtr int
+
 	// concurrency control for `multilines`, `multiline` and handling entries
 	sync.Mutex
 }
@@ -124,7 +128,7 @@ type multilineEntry struct {
 	// timestamp of the *first* log line entry. so, the timestamp send to the `next` handler  will  be the timestamp of
 	// the first log line
 	timestamp time.Time
-	// this multine log entry group key
+	// this multiline log entry group key
 	key string
 	// text of the log lines concatenated
 	entry string
@@ -241,15 +245,15 @@ func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler
 	}
 
 	// expression config
-	if len(config.Expression) > 0 {
-		expr, err := regexp.Compile(config.Expression)
-		if err != nil {
-			return nil, errors.Wrap(err, ErrCouldNotCompileMultiLineExpressionRegex)
-		}
-		ml.expressionRegex = expr
-	} else {
-		return nil, errors.New(ErrCouldMultiLineExpressionRequiredRegex)
+	exp := config.Expression
+	if len(exp) == 0 {
+		exp = "^.*$"
 	}
+	expr, err := regexp.Compile(exp)
+	if err != nil {
+		return nil, errors.Wrap(err, ErrCouldNotCompileMultiLineExpressionRegex)
+	}
+	ml.expressionRegex = expr
 
 	// first line expression config
 	if len(config.FirstLineExpression) > 0 {
@@ -299,6 +303,8 @@ func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler
 		requireMaxWait = true
 	case "continue":
 		ml.modeHandler = handleContinueMode
+	case "json":
+		ml.modeHandler = handleJsonMode
 	default:
 		return nil, errors.New(ErrMultiLineUnsupportedMode)
 	}
@@ -452,6 +458,110 @@ func handleContinueMode(c *multiLineParser, labels model.LabelSet, t time.Time, 
 	return
 }
 
+const (
+	jsonRegularInvalidState = iota
+	jsonInDocState
+	jsonInStringState
+)
+
+// Handler for json mode. Lines are valid json documents
+// note: ugly, simplify
+func handleJsonMode(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) error {
+	// json mode handler is not multi tracked
+	ml := c.multiline
+
+	var err util.MultiError
+
+out:
+	for {
+		if entry == "" {
+			break
+		}
+		//very very relaxed "json" parser
+		switch c.jsonState {
+		case jsonRegularInvalidState:
+			i := strings.Index(entry, "{")
+			if i < 0 {
+				//just ignore no json docs
+				break out
+			} else {
+				//ignore prev no json docs
+				//init multiline
+				ml.init(labels, t, "{")
+				entry = entry[i+1:]
+				c.jsonObjectCtr = 1
+				c.jsonState = jsonInDocState
+
+			}
+		case jsonInDocState, jsonInStringState:
+			left := ""
+			for {
+				i := strings.IndexAny(entry, "\\\"{}")
+				if i < 0 {
+					left += entry
+					entry = ""
+					break
+				}
+				l := len(entry)
+				switch entry[i] {
+				case '\\':
+					if i < l {
+						i++
+					}
+				case '"':
+					if c.jsonState == jsonInDocState {
+						c.jsonState = jsonInStringState
+					} else {
+						c.jsonState = jsonInDocState
+
+					}
+				case '{':
+					if c.jsonState != jsonInStringState {
+						c.jsonObjectCtr++
+					}
+
+				case '}':
+					if c.jsonState == jsonInStringState {
+						break
+					}
+					c.jsonObjectCtr--
+					if c.jsonObjectCtr == 0 {
+						left = left + entry[:i+1]
+						ml.append(labels, selectionDynamic(c, ml, left), "")
+						err.Add(c.next.Handle(ml.labels, ml.timestamp, ml.entry))
+						ml.reset()
+						entry = entry[i+1:]
+						left = ""
+						c.jsonState = jsonRegularInvalidState
+						continue out
+					}
+				}
+				left = left + entry[:i+1]
+				entry = entry[i+1:]
+				if entry == "" {
+					break
+				}
+			}
+			if left != "" {
+				ml.append(labels, selectionDynamic(c, ml, left), "")
+			}
+		default:
+			//something very wrong here
+			level.Warn(c.logger).Log("msg", "invalid json parsing state", "state", c.jsonState, "text", ml.entry+entry)
+			ml.reset()
+			c.jsonState = jsonRegularInvalidState
+			c.jsonObjectCtr = 0
+			break out
+		}
+	}
+
+	if ml.entry != "" {
+		ml.append(labels, "", c.separator)
+	}
+
+	return err.Err()
+}
+
 // Multiline entry handler
 func (c *multiLineParser) Handle(labels model.LabelSet, t time.Time, entry string) (err error) {
 	// labels should not be nil, never
@@ -535,4 +645,13 @@ func selection(expression *regexp.Regexp, s string) string {
 	}
 	sel, _ := disjoint(expression, s)
 	return sel
+}
+
+func selectionDynamic(c *multiLineParser, ml *multilineEntry, line string) string {
+	//select regexp based in prev multiline content
+	expr := c.firstLineRegex
+	if ml.entry != "" {
+		expr = c.nextLineRegex
+	}
+	return selection(expr, line)
 }
