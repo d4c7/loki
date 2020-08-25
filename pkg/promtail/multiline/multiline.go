@@ -23,7 +23,7 @@ const (
 	ErrMultiLineModeRequireMaxWait             = "mode require max_idle_duration duration > 0 "
 )
 
-// multilne EntryHandler is an api.EntryHandler that allows to flush buffered log lines and be stopped
+// multiline EntryHandler is an api.EntryHandler that allows to flush buffered log lines and be stopped
 type EntryHandler interface {
 	//Flush orders the immediate drain of the log entries retained
 	Flush() error
@@ -112,7 +112,7 @@ type multiLineParser struct {
 
 	//json parser state
 	jsonState int
-	//json open brance counter
+	//json open branch counter
 	jsonObjectCtr int
 
 	// concurrency control for `multilines`, `multiline` and handling entries
@@ -305,6 +305,7 @@ func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler
 		ml.modeHandler = handleContinueMode
 	case "json":
 		ml.modeHandler = handleJsonMode
+		requireMaxWait = true
 	default:
 		return nil, errors.New(ErrMultiLineUnsupportedMode)
 	}
@@ -337,229 +338,6 @@ func NewMultiLineParser(logger log.Logger, config *Config, next api.EntryHandler
 	}
 
 	return ml, nil
-}
-
-// Handler for newline mode. Lines are appended until a new line regular expression match
-func handleNewLineMode(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) (err error) {
-	//continue mode handler is not multi tracked
-	ml := c.multiline
-
-	if !c.expressionRegex.Match([]byte(entry)) {
-		// `entry` is not a new line
-		// if there is a next line regular expression use it to append the captured text  to the multiline entry
-		// if not append `entry` to the multiline entry
-		ml.append(labels, selection(c.nextLineRegex, entry), c.separator)
-	} else {
-		// `entry` is a new line
-		// if a previous multiline entry exists (i.e. has lines) then handle it
-		if ml.lines > 0 {
-			//handle multiline entry content
-			err = c.next.Handle(ml.labels, ml.timestamp, ml.entry)
-		}
-		// init a new multiline entry
-		// overrides previous struct to reduce allocation
-		ml.init(labels, t, selection(c.firstLineRegex, entry))
-	}
-	return
-}
-
-// Handler for group mode. Lines are appended by the extracted group key of the lines
-func handleGroupMode(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) (err error) {
-	// group mode handler is not multi tracked
-	ml := c.multiline
-	// the group key is the concatenation of the capturing groups of the regular expression
-	// `inv` is the inverse of `key`
-	key, inv := disjoint(c.expressionRegex, entry)
-	if ml.key == key {
-		// the group key is equal to the previous line, so we're going to append a new line
-		// the default line to appended is the line without the group key to avoid repetition
-		line := inv
-		// however if there is a next line regular expression the text to append is the capturing groups of the
-		// regular expression
-		if c.nextLineRegex != nil {
-			line = selection(c.nextLineRegex, entry)
-		}
-		//append the line
-		ml.append(labels, line, c.separator)
-	} else {
-		// the group key is not equal to the previous line
-		// handle the previous multiline entry if there is any
-		if ml.lines > 0 {
-			err = c.next.Handle(ml.labels, ml.timestamp, ml.entry)
-		}
-		// init the multiline entry with the log text or capturing groups if first line regular expression is defined
-		// overrides previous struct to reduce allocation
-		ml.init(labels, t, selection(c.firstLineRegex, entry))
-		//update multiline entry group key
-		ml.key = key
-	}
-	return
-}
-
-// Handler for unordered group mode. Lines are appended by the extracted group key of the lines tracking multiple keys
-func handleUnorderedGroupMode(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) (err error) {
-	// the group key is the concatenation of the capturing groups of the regular expression
-	// `inv` is the inverse of `key`
-	key, inv := disjoint(c.expressionRegex, entry)
-	// unordered group mode handler is multi tracked
-	// fetch the multiline entry of the line group key
-	// note: if there is not a multiline entry for the key a new one is created
-	ml := c.fetchLine(key)
-	if ml.lines > 0 {
-		// there is previous log lines for the group key so append the new line
-		// the default line to appended is the line without the group key to avoid repetition
-		line := inv
-		// however if there is a next line regular expression the text to append is the capturing groups of the
-		// regular expression
-		if c.nextLineRegex != nil {
-			line = selection(c.nextLineRegex, entry)
-		}
-		// append the new line
-		ml.append(labels, line, c.separator)
-	} else {
-		// init the multiline entry with the log text or capturing groups if first line regular expression is defined
-		ml.init(labels, t, selection(c.firstLineRegex, entry))
-		//set the multiline entry group key
-		ml.key = key
-	}
-	return
-}
-
-// Handler for continue mode. Lines are appended to the next if a continuation regular expression match the line
-func handleContinueMode(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) (err error) {
-	// group mode handler is not multi tracked
-	ml := c.multiline
-	//select the capturing text for the expression regex
-	line := selection(c.expressionRegex, entry)
-	if line != "" {
-		// the line has a continuation mark
-		if ml.lines > 0 {
-			// there is a previous multiline entry so append text
-			ml.append(labels, selection(c.nextLineRegex, line), c.separator)
-		} else {
-			// if there is not a previous multiline entry so init one
-			ml.init(labels, t, selection(c.firstLineRegex, line))
-		}
-	} else {
-		// the line has not a continuation mark
-		if ml.lines > 0 {
-			// there is a previous multiline entry so append the text
-			ml.append(labels, selection(c.nextLineRegex, entry), c.separator)
-			// and handle it
-			err = c.next.Handle(ml.labels, ml.timestamp, ml.entry)
-			// reset multiline entry
-			ml.reset()
-		} else {
-			// there is not a previous multiline entry and this line has no continuation mark
-			// so handle it directly
-			err = c.next.Handle(labels, t, entry)
-		}
-	}
-	return
-}
-
-const (
-	jsonRegularInvalidState = iota
-	jsonInDocState
-	jsonInStringState
-)
-
-// Handler for json mode. Lines are valid json documents
-// note: ugly, simplify
-func handleJsonMode(c *multiLineParser, labels model.LabelSet, t time.Time, entry string) error {
-	// json mode handler is not multi tracked
-	ml := c.multiline
-
-	var err util.MultiError
-
-out:
-	for {
-		if entry == "" {
-			break
-		}
-		//very very relaxed "json" parser
-		switch c.jsonState {
-		case jsonRegularInvalidState:
-			i := strings.Index(entry, "{")
-			if i < 0 {
-				//just ignore no json docs
-				break out
-			} else {
-				//ignore prev no json docs
-				//init multiline
-				ml.init(labels, t, "{")
-				entry = entry[i+1:]
-				c.jsonObjectCtr = 1
-				c.jsonState = jsonInDocState
-
-			}
-		case jsonInDocState, jsonInStringState:
-			left := ""
-			for {
-				i := strings.IndexAny(entry, "\\\"{}")
-				if i < 0 {
-					left += entry
-					entry = ""
-					break
-				}
-				l := len(entry)
-				switch entry[i] {
-				case '\\':
-					if i < l {
-						i++
-					}
-				case '"':
-					if c.jsonState == jsonInDocState {
-						c.jsonState = jsonInStringState
-					} else {
-						c.jsonState = jsonInDocState
-
-					}
-				case '{':
-					if c.jsonState != jsonInStringState {
-						c.jsonObjectCtr++
-					}
-
-				case '}':
-					if c.jsonState == jsonInStringState {
-						break
-					}
-					c.jsonObjectCtr--
-					if c.jsonObjectCtr == 0 {
-						left = left + entry[:i+1]
-						ml.append(labels, selectionDynamic(c, ml, left), "")
-						err.Add(c.next.Handle(ml.labels, ml.timestamp, ml.entry))
-						ml.reset()
-						entry = entry[i+1:]
-						left = ""
-						c.jsonState = jsonRegularInvalidState
-						continue out
-					}
-				}
-				left = left + entry[:i+1]
-				entry = entry[i+1:]
-				if entry == "" {
-					break
-				}
-			}
-			if left != "" {
-				ml.append(labels, selectionDynamic(c, ml, left), "")
-			}
-		default:
-			//something very wrong here
-			level.Warn(c.logger).Log("msg", "invalid json parsing state", "state", c.jsonState, "text", ml.entry+entry)
-			ml.reset()
-			c.jsonState = jsonRegularInvalidState
-			c.jsonObjectCtr = 0
-			break out
-		}
-	}
-
-	if ml.entry != "" {
-		ml.append(labels, "", c.separator)
-	}
-
-	return err.Err()
 }
 
 // Multiline entry handler
