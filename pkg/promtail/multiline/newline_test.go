@@ -112,6 +112,42 @@ func TestMultilineNewLineMode(t *testing.T) {
 			},
 			"",
 		},
+		"json serendipity": {
+			Config{
+				Mode:       "newline",
+				Expression: `^\s*\{\s*$`,
+				Separator:  "\n",
+			},
+			[]string{
+				"{",
+				"	\"_id\": \"1\",",
+				"	\"name\": {",
+				"		\"first\": \"One\",",
+				"	}",
+				"  },",
+				"  {",
+				"	\"_id\": \"2\",",
+				"	\"name\": {",
+				"		\"first\": \"Two\",",
+				"	}",
+				"  }",
+			},
+			[]string{
+				"{\n" +
+					"	\"_id\": \"1\",\n" +
+					"	\"name\": {\n" +
+					"		\"first\": \"One\",\n" +
+					"	}\n" +
+					"  },",
+				"  {\n" +
+					"	\"_id\": \"2\",\n" +
+					"	\"name\": {\n" +
+					"		\"first\": \"Two\",\n" +
+					"	}\n" +
+					"  }",
+			},
+			"",
+		},
 	}
 
 	runModeTest(t, tests)

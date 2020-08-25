@@ -34,44 +34,7 @@ func TestMultilineJsonMode(t *testing.T) {
 
 	tests := map[string]modeTest{
 
-		"json serendipity": {
-			Config{
-				Mode:       "newline",
-				Expression: `^\s*\{\s*$`,
-				Separator:  "\n",
-			},
-			[]string{
-				"{",
-				"	\"_id\": \"1\",",
-				"	\"name\": {",
-				"		\"first\": \"One\",",
-				"	}",
-				"  },",
-				"  {",
-				"	\"_id\": \"2\",",
-				"	\"name\": {",
-				"		\"first\": \"Two\",",
-				"	}",
-				"  }",
-			},
-			[]string{
-				"{\n" +
-					"	\"_id\": \"1\",\n" +
-					"	\"name\": {\n" +
-					"		\"first\": \"One\",\n" +
-					"	}\n" +
-					"  },",
-				"  {\n" +
-					"	\"_id\": \"2\",\n" +
-					"	\"name\": {\n" +
-					"		\"first\": \"Two\",\n" +
-					"	}\n" +
-					"  }",
-			},
-			"",
-		},
-
-		"json mode": {
+		"json mode base test": {
 			Config{
 				Mode:      "json",
 				Separator: "\n",
@@ -108,7 +71,7 @@ func TestMultilineJsonMode(t *testing.T) {
 			},
 			"",
 		},
-		"json mode 2": {
+		"json mode complex docs with a lot of newlines": {
 			Config{
 				Mode:      "json",
 				Separator: "\n",
@@ -120,7 +83,7 @@ func TestMultilineJsonMode(t *testing.T) {
 			},
 			"",
 		},
-		"json mode 3": {
+		"json mode multiple json docs in one line": {
 			Config{
 				Mode:      "json",
 				Separator: "\n",
@@ -132,12 +95,24 @@ func TestMultilineJsonMode(t *testing.T) {
 			},
 			"",
 		},
-		"json mode 4": {
+		"json mode ignoring garbage": {
 			Config{
 				Mode:      "json",
 				Separator: "\n",
 			},
 			[]string{`garbage1{"_id": "2"}garbage2{"first": "Two"}garbage3`},
+			[]string{
+				`{"_id": "2"}`,
+				`{"first": "Two"}`,
+			},
+			"",
+		},
+		"json mode root array processing": {
+			Config{
+				Mode:      "json",
+				Separator: "\n",
+			},
+			[]string{`[{"_id": "2"},{"first": "Two"}]`},
 			[]string{
 				`{"_id": "2"}`,
 				`{"first": "Two"}`,
