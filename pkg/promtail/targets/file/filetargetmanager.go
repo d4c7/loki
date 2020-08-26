@@ -57,6 +57,7 @@ type FileTargetManager struct {
 
 // NewFileTargetManager creates a new TargetManager.
 func NewFileTargetManager(
+	pm stages.StagePlugins,
 	logger log.Logger,
 	positions positions.Positions,
 	client api.EntryHandler,
@@ -83,7 +84,12 @@ func NewFileTargetManager(
 		}
 
 		registerer := prometheus.DefaultRegisterer
-		pipeline, err := stages.NewPipeline(log.With(logger, "component", "file_pipeline"), cfg.PipelineStages, &cfg.JobName, registerer)
+		pipeline, err := stages.NewPipeline(&stages.PipelineConfig{
+			Logger:         log.With(logger, "component", "file_pipeline"),
+			Plugins:        pm,
+			PipelineStages: cfg.PipelineStages,
+			JobName:        &cfg.JobName,
+			Registerer:     registerer})
 		if err != nil {
 			return nil, err
 		}
@@ -93,14 +99,22 @@ func NewFileTargetManager(
 			switch cfg.EntryParser {
 			case api.CRI:
 				level.Warn(logger).Log("msg", "WARNING!!! entry_parser config is deprecated, please change to pipeline_stages")
-				cri, err := stages.NewCRI(logger, registerer)
+				cri, err := stages.NewCRI(&stages.StageConfig{
+					Logger:     logger,
+					Registerer: registerer,
+					Plugins:    pm,
+				})
 				if err != nil {
 					return nil, err
 				}
 				pipeline.AddStage(cri)
 			case api.Docker:
 				level.Warn(logger).Log("msg", "WARNING!!! entry_parser config is deprecated, please change to pipeline_stages")
-				docker, err := stages.NewDocker(logger, registerer)
+				docker, err := stages.NewDocker(&stages.StageConfig{
+					Logger:     logger,
+					Registerer: registerer,
+					Plugins:    pm,
+				})
 				if err != nil {
 					return nil, err
 				}

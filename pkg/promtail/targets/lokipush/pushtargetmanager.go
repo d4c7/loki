@@ -23,6 +23,7 @@ type PushTargetManager struct {
 
 // NewPushTargetManager creates a new PushTargetManager.
 func NewPushTargetManager(
+	pm stages.StagePlugins,
 	logger log.Logger,
 	client api.EntryHandler,
 	scrapeConfigs []scrapeconfig.Config,
@@ -39,7 +40,12 @@ func NewPushTargetManager(
 
 	for _, cfg := range scrapeConfigs {
 		registerer := prometheus.DefaultRegisterer
-		pipeline, err := stages.NewPipeline(log.With(logger, "component", "push_pipeline_"+cfg.JobName), cfg.PipelineStages, &cfg.JobName, registerer)
+		pipeline, err := stages.NewPipeline(&stages.PipelineConfig{
+			Logger:         log.With(logger, "component", "push_pipeline_"+cfg.JobName),
+			Plugins:        pm,
+			PipelineStages: cfg.PipelineStages,
+			JobName:        &cfg.JobName,
+			Registerer:     registerer})
 		if err != nil {
 			return nil, err
 		}

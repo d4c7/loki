@@ -1,6 +1,7 @@
 package promtail
 
 import (
+	"github.com/grafana/loki/pkg/plugins"
 	"sync"
 
 	"github.com/cortexproject/cortex/pkg/util"
@@ -41,6 +42,7 @@ func New(cfg config.Config, dryRun bool, opts ...Option) (*Promtail, error) {
 	promtail := &Promtail{
 		logger: util.Logger,
 	}
+
 	for _, o := range opts {
 		o(promtail)
 	}
@@ -60,6 +62,14 @@ func New(cfg config.Config, dryRun bool, opts ...Option) (*Promtail, error) {
 	}
 
 	var err error
+
+	// init plugin manager
+	pm, err := plugins.NewPluginManager(promtail.logger)
+
+	if err != nil {
+		return nil, err
+	}
+
 	if dryRun {
 		promtail.client, err = client.NewLogger(promtail.logger, cfg.ClientConfig.ExternalLabels, cfg.ClientConfigs...)
 		if err != nil {
@@ -73,7 +83,7 @@ func New(cfg config.Config, dryRun bool, opts ...Option) (*Promtail, error) {
 		}
 	}
 
-	tms, err := targets.NewTargetManagers(promtail, promtail.logger, cfg.PositionsConfig, promtail.client, cfg.ScrapeConfig, &cfg.TargetConfig)
+	tms, err := targets.NewTargetManagers(pm, promtail, promtail.logger, cfg.PositionsConfig, promtail.client, cfg.ScrapeConfig, &cfg.TargetConfig)
 	if err != nil {
 		return nil, err
 	}

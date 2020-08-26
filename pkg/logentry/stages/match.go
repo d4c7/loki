@@ -5,10 +5,8 @@ import (
 
 	"github.com/prometheus/prometheus/pkg/labels"
 
-	"github.com/go-kit/kit/log"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
 
 	"github.com/grafana/loki/pkg/logql"
@@ -68,9 +66,9 @@ func validateMatcherConfig(cfg *MatcherConfig) (logql.LogSelectorExpr, error) {
 }
 
 // newMatcherStage creates a new matcherStage from config
-func newMatcherStage(logger log.Logger, jobName *string, config interface{}, registerer prometheus.Registerer) (Stage, error) {
+func newMatcherStage(stgCfg *StageConfig) (Stage, error) {
 	cfg := &MatcherConfig{}
-	err := mapstructure.Decode(config, cfg)
+	err := mapstructure.Decode(stgCfg.Config, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -80,17 +78,22 @@ func newMatcherStage(logger log.Logger, jobName *string, config interface{}, reg
 	}
 
 	var nPtr *string
-	if cfg.PipelineName != nil && jobName != nil {
-		name := *jobName + "_" + *cfg.PipelineName
+	if cfg.PipelineName != nil && stgCfg.JobName != nil {
+		name := *stgCfg.JobName + "_" + *cfg.PipelineName
 		nPtr = &name
 	}
 
 	var pl *Pipeline
 	if cfg.Action == MatchActionKeep {
 		var err error
-		pl, err = NewPipeline(logger, cfg.Stages, nPtr, registerer)
+		pl, err = NewPipeline(&PipelineConfig{
+			Logger:         stgCfg.Logger,
+			Plugins:        stgCfg.Plugins,
+			PipelineStages: cfg.Stages,
+			JobName:        nPtr,
+			Registerer:     stgCfg.Registerer})
 		if err != nil {
-			return nil, errors.Wrapf(err, "match stage failed to create pipeline from config: %v", config)
+			return nil, errors.Wrapf(err, "match stage failed to create pipeline from config: %v", stgCfg)
 		}
 	}
 

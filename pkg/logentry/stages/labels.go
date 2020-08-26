@@ -39,9 +39,9 @@ func validateLabelsConfig(c LabelsConfig) error {
 }
 
 // newLabelStage creates a new label stage to set labels from extracted data
-func newLabelStage(logger log.Logger, configs interface{}) (*labelStage, error) {
+func newLabelStage(stgCfg *StageConfig) (*labelStage, error) {
 	cfgs := &LabelsConfig{}
-	err := mapstructure.Decode(configs, cfgs)
+	err := mapstructure.Decode(stgCfg.Config, cfgs)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func newLabelStage(logger log.Logger, configs interface{}) (*labelStage, error) 
 	}
 	return &labelStage{
 		cfgs:   *cfgs,
-		logger: logger,
+		logger: stgCfg.Logger,
 	}, nil
 }
 

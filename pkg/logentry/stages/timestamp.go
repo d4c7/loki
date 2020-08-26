@@ -86,9 +86,9 @@ func validateTimestampConfig(cfg *TimestampConfig) (parser, error) {
 }
 
 // newTimestampStage creates a new timestamp extraction pipeline stage.
-func newTimestampStage(logger log.Logger, config interface{}) (*timestampStage, error) {
+func newTimestampStage(stgCfg *StageConfig) (*timestampStage, error) {
 	cfg := &TimestampConfig{}
-	err := mapstructure.Decode(config, cfg)
+	err := mapstructure.Decode(stgCfg.Config, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func newTimestampStage(logger log.Logger, config interface{}) (*timestampStage, 
 
 	return &timestampStage{
 		cfg:                 cfg,
-		logger:              logger,
+		logger:              stgCfg.Logger,
 		parser:              parser,
 		lastKnownTimestamps: lastKnownTimestamps,
 	}, nil

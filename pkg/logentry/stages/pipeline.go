@@ -28,15 +28,43 @@ type Pipeline struct {
 	plDuration *prometheus.HistogramVec
 }
 
+type PipelineConfig struct {
+	Logger         log.Logger
+	Registerer     prometheus.Registerer
+	JobName        *string
+	PipelineStages PipelineStages
+	Plugins        StagePlugins
+}
+
+type StageConfig struct {
+	Logger     log.Logger
+	Registerer prometheus.Registerer
+	JobName    *string
+	Plugins    StagePlugins
+	StageType  string
+	Config     interface{}
+}
+
+func (c StageConfig) asPipelineConfigWithStages(stages PipelineStages) *PipelineConfig {
+	pipelineConfig := &PipelineConfig{
+		Logger:         c.Logger,
+		Registerer:     c.Registerer,
+		JobName:        c.JobName,
+		PipelineStages: stages,
+		Plugins:        c.Plugins,
+	}
+	return pipelineConfig
+}
+
 // NewPipeline creates a new log entry pipeline from a configuration
-func NewPipeline(logger log.Logger, stgs PipelineStages, jobName *string, registerer prometheus.Registerer) (*Pipeline, error) {
+func NewPipeline(cfg *PipelineConfig) (*Pipeline, error) {
 	hist := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "logentry",
 		Name:      "pipeline_duration_seconds",
 		Help:      "Label and metric extraction pipeline processing time, in seconds",
 		Buckets:   []float64{.000005, .000010, .000025, .000050, .000100, .000250, .000500, .001000, .002500, .005000, .010000, .025000},
 	}, []string{"job_name"})
-	err := registerer.Register(hist)
+	err := cfg.Registerer.Register(hist)
 	if err != nil {
 		if existing, ok := err.(prometheus.AlreadyRegisteredError); ok {
 			hist = existing.ExistingCollector.(*prometheus.HistogramVec)
@@ -47,7 +75,7 @@ func NewPipeline(logger log.Logger, stgs PipelineStages, jobName *string, regist
 	}
 
 	st := []Stage{}
-	for _, s := range stgs {
+	for _, s := range cfg.PipelineStages {
 		stage, ok := s.(PipelineStage)
 		if !ok {
 			return nil, errors.Errorf("invalid YAML config, "+
@@ -61,7 +89,15 @@ func NewPipeline(logger log.Logger, stgs PipelineStages, jobName *string, regist
 			if !ok {
 				return nil, errors.New("pipeline stage key must be a string")
 			}
-			newStage, err := New(logger, jobName, name, config, registerer)
+			stageConfig := &StageConfig{
+				Logger:     cfg.Logger,
+				Registerer: cfg.Registerer,
+				JobName:    cfg.JobName,
+				Config:     config,
+				StageType:  name,
+				Plugins:    cfg.Plugins,
+			}
+			newStage, err := New(stageConfig)
 			if err != nil {
 				return nil, errors.Wrapf(err, "invalid %s stage config", name)
 			}
@@ -69,9 +105,9 @@ func NewPipeline(logger log.Logger, stgs PipelineStages, jobName *string, regist
 		}
 	}
 	return &Pipeline{
-		logger:     log.With(logger, "component", "pipeline"),
+		logger:     log.With(cfg.Logger, "component", "pipeline"),
 		stages:     st,
-		jobName:    jobName,
+		jobName:    cfg.JobName,
 		plDuration: hist,
 	}, nil
 }

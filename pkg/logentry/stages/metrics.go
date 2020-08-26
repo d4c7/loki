@@ -86,9 +86,9 @@ func validateMetricsConfig(cfg MetricsConfig) error {
 }
 
 // newMetricStage creates a new set of metrics to process for each log entry
-func newMetricStage(logger log.Logger, config interface{}, registry prometheus.Registerer) (*metricStage, error) {
+func newMetricStage(stgCfg *StageConfig) (*metricStage, error) {
 	cfgs := &MetricsConfig{}
-	err := mapstructure.Decode(config, cfgs)
+	err := mapstructure.Decode(stgCfg.Config, cfgs)
 	if err != nil {
 		return nil, err
 	}
@@ -124,12 +124,12 @@ func newMetricStage(logger log.Logger, config interface{}, registry prometheus.R
 				return nil, err
 			}
 		}
-		registry.MustRegister(collector)
+		stgCfg.Registerer.MustRegister(collector)
 		metrics[name] = collector
 
 	}
 	ms := &metricStage{
-		logger:  logger,
+		logger:  stgCfg.Logger,
 		cfg:     *cfgs,
 		metrics: metrics,
 	}

@@ -68,8 +68,8 @@ type regexStage struct {
 }
 
 // newRegexStage creates a newRegexStage
-func newRegexStage(logger log.Logger, config interface{}) (Stage, error) {
-	cfg, err := parseRegexConfig(config)
+func newRegexStage(stgCfg *StageConfig) (Stage, error) {
+	cfg, err := parseRegexConfig(stgCfg.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func newRegexStage(logger log.Logger, config interface{}) (Stage, error) {
 	return &regexStage{
 		cfg:        cfg,
 		expression: expression,
-		logger:     log.With(logger, "component", "stage", "type", "regex"),
+		logger:     log.With(stgCfg.Logger, "component", "stage", "type", "regex"),
 	}, nil
 }
 

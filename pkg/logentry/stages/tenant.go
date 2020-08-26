@@ -42,9 +42,9 @@ func validateTenantConfig(c TenantConfig) error {
 }
 
 // newTenantStage creates a new tenant stage to override the tenant ID from extracted data
-func newTenantStage(logger log.Logger, configs interface{}) (*tenantStage, error) {
+func newTenantStage(stgCfg *StageConfig) (*tenantStage, error) {
 	cfg := TenantConfig{}
-	err := mapstructure.Decode(configs, &cfg)
+	err := mapstructure.Decode(stgCfg.Config, &cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func newTenantStage(logger log.Logger, configs interface{}) (*tenantStage, error
 
 	return &tenantStage{
 		cfg:    cfg,
-		logger: logger,
+		logger: stgCfg.Logger,
 	}, nil
 }
 

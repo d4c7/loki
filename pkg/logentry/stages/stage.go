@@ -3,9 +3,7 @@ package stages
 import (
 	"time"
 
-	"github.com/go-kit/kit/log"
 	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
 )
 
@@ -23,7 +21,6 @@ const (
 	StageTypeTemplate  = "template"
 	StageTypePipeline  = "pipeline"
 	StageTypeTenant    = "tenant"
-	StageTypeScript    = "script"
 )
 
 // Stage takes an existing set of labels, timestamp and log entry and returns either a possibly mutated
@@ -31,6 +28,10 @@ const (
 type Stage interface {
 	Process(labels model.LabelSet, extracted map[string]interface{}, time *time.Time, entry *string)
 	Name() string
+}
+
+type StagePlugins interface {
+	NewStage(cfg *StageConfig) (Stage, error)
 }
 
 // StageFunc is modelled on http.HandlerFunc.
@@ -41,79 +42,91 @@ func (s StageFunc) Process(labels model.LabelSet, extracted map[string]interface
 	s(labels, extracted, time, entry)
 }
 
+type StageCreator func(cfg *StageConfig) (Stage, error)
+
+type PluginDescriptor struct {
+	Name    string
+	Version string
+	Stagger StageCreator
+}
+
 // New creates a new stage for the given type and configuration.
-func New(logger log.Logger, jobName *string, stageType string,
-	cfg interface{}, registerer prometheus.Registerer) (Stage, error) {
+func New(cfg *StageConfig) (Stage, error) {
 	var s Stage
 	var err error
-	switch stageType {
+	if cfg.Plugins != nil {
+		s, err = cfg.Plugins.NewStage(cfg)
+
+		if err != nil {
+			return nil, err
+		}
+		if s != nil {
+			return s, nil
+		}
+	}
+	switch cfg.StageType {
 	case StageTypeDocker:
-		s, err = NewDocker(logger, registerer)
+		s, err = NewDocker(cfg)
 		if err != nil {
 			return nil, err
 		}
 	case StageTypeCRI:
-		s, err = NewCRI(logger, registerer)
+		s, err = NewCRI(cfg)
 		if err != nil {
 			return nil, err
 		}
 	case StageTypeJSON:
-		s, err = newJSONStage(logger, cfg)
+		s, err = newJSONStage(cfg)
 		if err != nil {
 			return nil, err
 		}
 	case StageTypeRegex:
-		s, err = newRegexStage(logger, cfg)
+		s, err = newRegexStage(cfg)
 		if err != nil {
 			return nil, err
 		}
 	case StageTypeMetric:
-		s, err = newMetricStage(logger, cfg, registerer)
+		s, err = newMetricStage(cfg)
 		if err != nil {
 			return nil, err
 		}
 	case StageTypeLabel:
-		s, err = newLabelStage(logger, cfg)
+		s, err = newLabelStage(cfg)
 		if err != nil {
 			return nil, err
 		}
 	case StageTypeTimestamp:
-		s, err = newTimestampStage(logger, cfg)
+		s, err = newTimestampStage(cfg)
 		if err != nil {
 			return nil, err
 		}
 	case StageTypeOutput:
-		s, err = newOutputStage(logger, cfg)
+		s, err = newOutputStage(cfg)
 		if err != nil {
 			return nil, err
 		}
 	case StageTypeMatch:
-		s, err = newMatcherStage(logger, jobName, cfg, registerer)
+		s, err = newMatcherStage(cfg)
 		if err != nil {
 			return nil, err
 		}
 	case StageTypeTemplate:
-		s, err = newTemplateStage(logger, cfg)
+		s, err = newTemplateStage(cfg)
 		if err != nil {
 			return nil, err
 		}
 	case StageTypeTenant:
-		s, err = newTenantStage(logger, cfg)
+		s, err = newTenantStage(cfg)
 		if err != nil {
 			return nil, err
 		}
 	case StageTypeReplace:
-		s, err = newReplaceStage(logger, cfg)
-		if err != nil {
-			return nil, err
-		}
-	case StageTypeScript:
-		s, err = newScriptStage(logger, cfg)
+		s, err = newReplaceStage(cfg)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		return nil, errors.Errorf("Unknown stage type: %s", stageType)
+		return nil, errors.Errorf("Unknown stage type: %s", cfg.StageType)
 	}
 	return s, nil
 }

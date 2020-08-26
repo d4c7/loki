@@ -207,7 +207,12 @@ $(PROMTAIL_GENERATED_FILE): $(PROMTAIL_UI_FILES)
 	@echo ">> writing assets"
 	GOFLAGS="$(MOD_FLAG)" GOOS=$(shell go env GOHOSTOS) go generate -x -v ./pkg/promtail/server/ui
 
-cmd/promtail/promtail: $(APP_GO_FILES) $(PROMTAIL_GENERATED_FILE) cmd/promtail/main.go
+# Rule to resolve promtail plugins
+PROMTAIL_RESOLVE_PLUGINS:
+	@echo ">> resolve plugins"
+	GOFLAGS="$(MOD_FLAG)" GOOS=$(shell go env GOHOSTOS) go generate ./pkg/plugins
+
+cmd/promtail/promtail: $(APP_GO_FILES) PROMTAIL_RESOLVE_PLUGINS $(PROMTAIL_GENERATED_FILE) cmd/promtail/main.go
 	CGO_ENABLED=$(PROMTAIL_CGO) go build $(PROMTAIL_GO_FLAGS) -o $@ ./$(@D)
 	$(NETGO_CHECK)
 
