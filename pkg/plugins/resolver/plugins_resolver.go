@@ -1,4 +1,4 @@
-// build ignore
+// +build ignore
 
 package main
 
@@ -50,7 +50,7 @@ func main() {
 
 			repo := scanner.Text()
 
-			if ok, _ := regexp.Match(`\s+#`, []byte(repo)); ok {
+			if ok, _ := regexp.Match(`\s*#`, []byte(repo)); ok {
 				continue
 			}
 

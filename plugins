@@ -1,0 +1,15 @@
+# Experimental Promtail Plugins
+#
+# You can add a list of git promtail plugins repositories (one per line)
+#
+# You can generate promtail docker image as always usign
+#
+# make promtail-image
+#
+# You can fetch manually the plugins using
+#    go generate ./pkg/plugins/
+#
+# View documentation at blabla
+#
+# Sample plugins: https://github.com/d4c7/promtail-sample-plugin
+#
