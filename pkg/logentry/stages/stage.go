@@ -48,6 +48,7 @@ type PluginDescriptor struct {
 	Name    string
 	Version string
 	Stagger StageCreator
+	//TODO: PrestageCreator
 }
 
 // New creates a new stage for the given type and configuration.
