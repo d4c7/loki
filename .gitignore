@@ -26,5 +26,6 @@ coverage.txt
 .DS_Store
 .aws-sam
 /pkg/plugins/repo/*
-plugins
+!/pkg/plugins/repo/README
+/plugins
 /pkg/plugins/resolved.go
