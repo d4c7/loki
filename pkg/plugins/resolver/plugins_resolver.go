@@ -54,17 +54,24 @@ func main() {
 				continue
 			}
 
+			if ok, _ := regexp.MatchString(`^\s*$`, repo); ok {
+				continue
+			}
+
 			log.Println("processing " + repo)
 
 			_, name := fileParts(repo)
-			//if target exists
-			target := pluginsRepoPath + "/" + name
+			targetFile, err := filepath.Abs(pluginsRepoPath + "/" + name)
+			if err != nil {
+				log.Fatal(err)
+			}
 
-			info, err := os.Stat(target)
+			info, err := os.Stat(targetFile)
 			if os.IsNotExist(err) {
-				log.Println("clone repo " + repo)
 
-				cmd := exec.Command("git", "clone", repo, target)
+				log.Printf("clone repo in %s\n", targetFile)
+
+				cmd := exec.Command("git", "clone", repo, targetFile)
 				cmd.Stdout = os.Stdout
 				err := cmd.Run()
 				if err != nil {
@@ -72,9 +79,9 @@ func main() {
 				}
 			} else {
 				if !info.IsDir() {
-					log.Fatal(errors.New(target + " is not dir"))
+					log.Fatal(errors.New(targetFile + " is not dir"))
 				} else {
-					log.Println("do not override local " + target)
+					log.Println("do not override local " + targetFile)
 				}
 			}
 		}
